@@ -171,7 +171,7 @@ export async function fetchRoads(
   const query = `
 [out:json][timeout:30];
 (
-  way["highway"~"primary|secondary|tertiary|residential|unclassified"](around:${radius},${lat},${lng});
+  way["highway"](around:${radius},${lat},${lng});
 );
 out body geom;
   `.trim();
@@ -211,7 +211,7 @@ export async function fetchTownData(
 (
   way["building"](around:${radius},${lat},${lng});
   node["building"](around:${radius},${lat},${lng});
-  way["highway"~"primary|secondary|tertiary|residential|unclassified"](around:${radius},${lat},${lng});
+  way["highway"](around:${radius},${lat},${lng});
   way["waterway"~"river|stream|canal|ditch|drain|tidal_channel"](around:${radius},${lat},${lng});
   way["natural"="water"](around:${radius},${lat},${lng});
   way["water"~"pond|basin|reservoir|ocean|sea|bay"](around:${radius},${lat},${lng});

@@ -1,17 +1,18 @@
-import { TownModel } from '@/types';
+import { Road, TownModel } from '@/types';
 import { geocodeAddress } from './geocode';
+import { clipPolylineLatLngToDisk } from './geo';
 import { fetchTownData } from './overpass';
 import { DEMO_TOWN_MODEL } from './fallback';
 import { writeFileSync } from 'fs';
 
 /** OSM Overpass `around:` radius — buildings/roads that intersect this disk are included. */
-const RADIUS_M = 2000;
+const RADIUS_M = 1000;
 
 /**
  * 3D grass terrain disk radius (meters), centered on the town.
  * Can be larger than {@link RADIUS_M} so building polygons that straddle the query circle still sit on textured ground.
  */
-const GROUND_RADIUS_M = 2300;
+const GROUND_RADIUS_M = RADIUS_M + 200;
 
 export interface BuildTownModelOptions {
   /** Passed to Mapbox forward geocode as `proximity` (lng, lat). */
@@ -62,6 +63,16 @@ export async function buildTownModel(
   const centerLat = location.lat;
   const centerLng = location.lng;
 
+  const clippedRoads: Road[] = roads.flatMap((road) => {
+    const parts = clipPolylineLatLngToDisk(road.geometry, centerLat, centerLng, RADIUS_M);
+    if (parts.length === 0) return [];
+    return parts.map((geom, i) => ({
+      ...road,
+      id: parts.length > 1 ? `${road.id}_p${i}` : road.id,
+      geometry: geom,
+    }));
+  });
+
   const residentialCount = buildings.filter((b) => b.type === 'residential').length;
   const population_estimate = Math.round(residentialCount * 2.5);
 
@@ -76,7 +87,7 @@ export async function buildTownModel(
       west: Math.min(...lngs, centerLng - 0.008),
     },
     buildings,
-    roads,
+    roads: clippedRoads,
     waterFeatures: waterFeatures ?? [],
     infrastructure,
     population_estimate,

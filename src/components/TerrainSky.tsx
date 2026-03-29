@@ -2,7 +2,7 @@
 
 import { useLayoutEffect, useMemo, useState } from 'react';
 import { useThree } from '@react-three/fiber';
-import { Sky, Cloud } from '@react-three/drei';
+import { Sky } from '@react-three/drei';
 import * as THREE from 'three';
 
 /** Procedural neutral gray variation (in-bounds ground) — client-only */
@@ -127,7 +127,7 @@ export function TerrainGround({ scopeRadiusM, segments = 112 }: TerrainGroundPro
   );
 }
 
-/** Atmospheric sky, sun, soft clouds, exponential fog */
+/** Atmospheric sky, sun, exponential fog */
 export function Atmosphere() {
   const { scene } = useThree();
 
@@ -150,9 +150,6 @@ export function Atmosphere() {
         mieCoefficient={0.0045}
         mieDirectionalG={0.77}
       />
-      <Cloud position={[-380, 140, -520]} speed={0.15} opacity={0.52} segments={32} />
-      <Cloud position={[420, 160, 380]} speed={0.12} opacity={0.45} segments={28} />
-      <Cloud position={[120, 200, -280]} speed={0.18} opacity={0.38} segments={24} />
       <hemisphereLight color="#c8daf0" groundColor="#8e95a0" intensity={0.55} />
       <ambientLight intensity={0.28} color="#e8eef5" />
       <directionalLight

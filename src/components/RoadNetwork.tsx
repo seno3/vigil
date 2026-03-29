@@ -1,12 +1,11 @@
 'use client';
 
-import { useLayoutEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import * as THREE from 'three';
-import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { Road } from '@/types';
-import { latLngToLocal } from '@/lib/geo';
+import { distanceMeters, latLngToLocal } from '@/lib/geo';
 import { createAsphaltTextures, createRoadEdgeTexture } from '@/lib/proceduralTextures';
-import { FLAT_SURFACE_Y } from '@/lib/sceneHeights';
+import { ROAD_SURFACE_Y } from '@/lib/sceneHeights';
 
 function roadWidthM(type: string): number {
   const t = type.toLowerCase();
@@ -18,19 +17,32 @@ function roadWidthM(type: string): number {
   return 7;
 }
 
-/** Meters per full UV tile along the road (asphalt texture repeat) */
 const ASPHALT_U_METERS = 4.5;
 
-/**
- * Flat ribbon with UVs: U along path length (tiled), V across width (0–1).
- */
+/** Drop duplicate / micro-segments so ribbons don't collapse to zero-area tris. */
+function dedupeRoadPoints(geometry: [number, number][], minM = 0.4): [number, number][] {
+  if (geometry.length < 2) return geometry;
+  const out: [number, number][] = [geometry[0]];
+  for (let i = 1; i < geometry.length; i++) {
+    const [lat, lng] = geometry[i];
+    const [plat, plng] = out[out.length - 1];
+    if (distanceMeters(plat, plng, lat, lng) >= minM) {
+      out.push([lat, lng]);
+    }
+  }
+  if (out.length < 2) return [geometry[0], geometry[geometry.length - 1]];
+  return out;
+}
+
 function buildRibbon(
   pts: THREE.Vector3[],
   halfWidth: number,
   yElev: number,
-  uScaleMeters: number
+  uScaleMeters: number,
 ): THREE.BufferGeometry | null {
   if (pts.length < 2) return null;
+
+  const hw = Math.max(halfWidth, 2.5);
 
   const vertices: number[] = [];
   const normals: number[] = [];
@@ -43,9 +55,9 @@ function buildRibbon(
     const q = new THREE.Vector3(pts[i + 1].x, yElev, pts[i + 1].z);
     const dir = new THREE.Vector3().subVectors(q, p);
     const segLen = Math.hypot(dir.x, dir.z);
-    if (segLen < 1e-6) continue;
+    if (segLen < 1e-5) continue;
     dir.multiplyScalar(1 / segLen);
-    const perp = new THREE.Vector3(-dir.z, 0, dir.x).multiplyScalar(halfWidth);
+    const perp = new THREE.Vector3(-dir.z, 0, dir.x).multiplyScalar(hw);
 
     const a = new THREE.Vector3().addVectors(p, perp);
     const b = new THREE.Vector3().subVectors(p, perp);
@@ -62,7 +74,7 @@ function buildRibbon(
       v3: THREE.Vector3,
       uv1: [number, number],
       uv2: [number, number],
-      uv3: [number, number]
+      uv3: [number, number],
     ) => {
       vertices.push(v1.x, v1.y, v1.z, v2.x, v2.y, v2.z, v3.x, v3.y, v3.z);
       const n = new THREE.Vector3(0, 1, 0);
@@ -87,7 +99,6 @@ interface RoadNetworkProps {
   roads: Road[];
   centerLat: number;
   centerLng: number;
-  /** Slightly lift above terrain to avoid z-fighting */
   yOffset?: number;
 }
 
@@ -95,14 +106,14 @@ export default function RoadNetwork({
   roads,
   centerLat,
   centerLng,
-  yOffset = FLAT_SURFACE_Y,
+  yOffset = ROAD_SURFACE_Y,
 }: RoadNetworkProps) {
   const [textures, setTextures] = useState<{
     asphalt: ReturnType<typeof createAsphaltTextures>;
     edge: THREE.CanvasTexture;
   } | null>(null);
 
-  useLayoutEffect(() => {
+  useEffect(() => {
     if (typeof document === 'undefined') return;
     setTextures({
       asphalt: createAsphaltTextures(),
@@ -110,71 +121,90 @@ export default function RoadNetwork({
     });
   }, []);
 
-  const { geometry, edgeGeometry } = useMemo(() => {
-    const geoms: THREE.BufferGeometry[] = [];
-    const edges: THREE.BufferGeometry[] = [];
+  const segments = useMemo(() => {
+    const main: { id: string; geom: THREE.BufferGeometry }[] = [];
+    const edge: { id: string; geom: THREE.BufferGeometry }[] = [];
 
     for (const road of roads) {
-      if (road.geometry.length < 2) continue;
-      const pts = road.geometry.map(([lat, lng]) => {
+      const coords = dedupeRoadPoints(road.geometry);
+      if (coords.length < 2) continue;
+
+      const pts = coords.map(([lat, lng]) => {
         const [x, z] = latLngToLocal(lat, lng, centerLat, centerLng);
         return new THREE.Vector3(x, yOffset, z);
       });
-      const w = roadWidthM(road.type) * 0.5;
-      const g = buildRibbon(pts, w, yOffset, ASPHALT_U_METERS);
-      if (g) geoms.push(g);
 
-      const wEdge = w + 0.35;
-      const ge = buildRibbon(pts, wEdge, yOffset - 0.02, ASPHALT_U_METERS * 1.2);
-      if (ge) edges.push(ge);
+      const w = Math.max(roadWidthM(road.type) * 0.5, 2.5);
+      const g = buildRibbon(pts, w, yOffset, ASPHALT_U_METERS);
+      if (g) main.push({ id: road.id, geom: g });
+
+      const ge = buildRibbon(pts, w + 0.45, yOffset - 0.06, ASPHALT_U_METERS * 1.2);
+      if (ge) edge.push({ id: `${road.id}-edge`, geom: ge });
     }
 
-    return {
-      geometry: mergeGeoms(geoms),
-      edgeGeometry: mergeGeoms(edges),
-    };
+    return { main, edge };
   }, [roads, centerLat, centerLng, yOffset]);
 
-  if (!geometry) return null;
+  const asphaltMat = useMemo(() => {
+    const m = new THREE.MeshStandardMaterial({
+      color: 0xb8c2d0,
+      roughness: 0.72,
+      metalness: 0.06,
+      envMapIntensity: 0.7,
+      side: THREE.DoubleSide,
+    });
+    return m;
+  }, []);
 
-  const edge = edgeGeometry ?? undefined;
-  const { map, roughnessMap } = textures?.asphalt ?? {};
-  const edgeMap = textures?.edge;
+  const edgeMat = useMemo(() => {
+    const m = new THREE.MeshStandardMaterial({
+      color: 0x2a3038,
+      roughness: 0.9,
+      metalness: 0.04,
+      side: THREE.DoubleSide,
+    });
+    return m;
+  }, []);
+
+  useEffect(() => {
+    if (!textures) return;
+    asphaltMat.map = textures.asphalt.map;
+    asphaltMat.roughnessMap = textures.asphalt.roughnessMap;
+    asphaltMat.color.setHex(0xffffff);
+    asphaltMat.needsUpdate = true;
+    edgeMat.map = textures.edge;
+    edgeMat.needsUpdate = true;
+    return () => {
+      asphaltMat.map = null;
+      asphaltMat.roughnessMap = null;
+      edgeMat.map = null;
+    };
+  }, [textures, asphaltMat, edgeMat]);
+
+  useEffect(() => {
+    return () => {
+      segments.main.forEach(({ geom }) => geom.dispose());
+      segments.edge.forEach(({ geom }) => geom.dispose());
+    };
+  }, [segments]);
+
+  useEffect(() => {
+    return () => {
+      asphaltMat.dispose();
+      edgeMat.dispose();
+    };
+  }, [asphaltMat, edgeMat]);
+
+  if (segments.main.length === 0) return null;
 
   return (
-    <group name="road-network">
-      {edge && (
-        <mesh geometry={edge} receiveShadow>
-          <meshStandardMaterial
-            map={edgeMap}
-            color="#1e2228"
-            roughness={0.96}
-            metalness={0.03}
-            polygonOffset
-            polygonOffsetFactor={1}
-            polygonOffsetUnits={1}
-          />
-        </mesh>
-      )}
-      <mesh geometry={geometry} receiveShadow>
-        <meshStandardMaterial
-          map={map}
-          roughnessMap={roughnessMap}
-          color={map ? '#ffffff' : '#3a3f47'}
-          roughness={0.82}
-          metalness={0.08}
-          envMapIntensity={0.55}
-          polygonOffset
-          polygonOffsetFactor={2}
-          polygonOffsetUnits={2}
-        />
-      </mesh>
+    <group name="road-network" renderOrder={10}>
+      {segments.edge.map(({ id, geom }) => (
+        <mesh key={id} geometry={geom} material={edgeMat} receiveShadow renderOrder={10} />
+      ))}
+      {segments.main.map(({ id, geom }) => (
+        <mesh key={id} geometry={geom} material={asphaltMat} receiveShadow renderOrder={11} />
+      ))}
     </group>
   );
-}
-
-function mergeGeoms(geoms: THREE.BufferGeometry[]): THREE.BufferGeometry | null {
-  if (geoms.length === 0) return null;
-  if (geoms.length === 1) return geoms[0];
-  return mergeGeometries(geoms, false);
 }

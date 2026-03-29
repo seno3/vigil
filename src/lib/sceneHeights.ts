@@ -12,6 +12,9 @@ export const TERRAIN_DISPLACEMENT_MAX = 9.5;
 /** Roads, building bases, path overlays, tornado ground contact */
 export const FLAT_SURFACE_Y = TERRAIN_MESH_Y + TERRAIN_DISPLACEMENT_MAX + 0.35;
 
+/** Slightly above {@link FLAT_SURFACE_Y} so road ribbons clear displaced terrain without polygonOffset burying them. */
+export const ROAD_SURFACE_Y = FLAT_SURFACE_Y + 0.12;
+
 /** Water planes sit a hair lower than roads to reduce z-fighting; still above terrain peaks */
 export const WATER_SURFACE_Y = FLAT_SURFACE_Y - 0.06;
 

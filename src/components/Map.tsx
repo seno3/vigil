@@ -99,16 +99,16 @@ export default function Map({ townModel, onAddressSelect, loading }: MapProps) {
     };
   }, [onAddressSelect, syncCenter]);
 
-  // Draw building footprints on map
+  // Building footprints only — streets render in the 3D scene (RoadNetwork), not on this picker map
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapLoaded || !townModel) return;
 
-    // Remove existing layers
-    ['buildings-fill', 'buildings-outline'].forEach((id) => {
+    ['buildings-fill', 'buildings-outline', 'roads-line', 'roads-casing'].forEach((id) => {
       if (map.getLayer(id)) map.removeLayer(id);
     });
     if (map.getSource('buildings')) map.removeSource('buildings');
+    if (map.getSource('roads')) map.removeSource('roads');
 
     const features = townModel.buildings.map((b) => ({
       type: 'Feature' as const,
@@ -159,8 +159,7 @@ export default function Map({ townModel, onAddressSelect, loading }: MapProps) {
       duration: 1000,
     });
 
-    // Fit bounds to show all buildings
-    if (features.length > 0 && mapboxglRef.current) {
+    if (mapboxglRef.current && features.length > 0) {
       const bounds = new mapboxglRef.current.LngLatBounds();
       features.forEach((f) => {
         f.geometry.coordinates[0].forEach((coord) => {
