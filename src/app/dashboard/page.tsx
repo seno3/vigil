@@ -56,6 +56,7 @@ export default function DashboardPage() {
   }, [userLoc]);
   const [threatBuildings, setThreatBuildings] = useState<Record<string, ThreatState['threatLevel']>>({});
   const [flareBuildings, setFlareBuildings] = useState<Record<string, TipCategory>>({});
+  const [roadFlarePoints, setRoadFlarePoints] = useState<Array<{ lng: number; lat: number; category: TipCategory }>>([]);
   const [locateTrigger, setLocateTrigger] = useState(0);
   const [tipModal, setTipModal] = useState<{ lng: number; lat: number; buildingId?: string } | null>(null);
   const [mapContext, setMapContext] = useState<{ map: any; mapboxGL: any } | null>(null);
@@ -121,10 +122,21 @@ export default function DashboardPage() {
         byBuilding.get(t.buildingId)!.push(t);
       }
       const next: Record<string, TipCategory> = {};
+      const roadPts: Array<{ lng: number; lat: number; category: TipCategory }> = [];
       byBuilding.forEach((arr: Tip[], id: string) => {
-        next[id] = topFlareCategory(arr);
+        if (id.startsWith('road:')) {
+          // One point per flare on a road (exact click coordinates)
+          arr.forEach(t => roadPts.push({
+            lng: t.location.coordinates[0],
+            lat: t.location.coordinates[1],
+            category: t.category,
+          }));
+        } else {
+          next[id] = topFlareCategory(arr);
+        }
       });
       setFlareBuildings(next);
+      setRoadFlarePoints(roadPts);
     } catch {
       /* silent */
     }
@@ -138,6 +150,11 @@ export default function DashboardPage() {
   const handleBuildingClick = useCallback((lng: number, lat: number, buildingId: string) => {
     if (!user) { setShowAuth(true); return; }
     setBuildingPopup({ lng, lat, buildingId });
+  }, [user]);
+
+  const handleRoadClick = useCallback((lng: number, lat: number, roadId: string) => {
+    if (!user) { setShowAuth(true); return; }
+    setTipModal({ lng, lat, buildingId: roadId });
   }, [user]);
 
   const handleLocate = useCallback(() => {
@@ -256,6 +273,7 @@ export default function DashboardPage() {
           <MapView
             threatBuildings={threatBuildings}
             flareBuildings={flareBuildings}
+            roadFlarePoints={roadFlarePoints}
             is3D={is3D}
             center={center}
             locateTrigger={locateTrigger}
@@ -264,6 +282,7 @@ export default function DashboardPage() {
             onReady={() => setRevealed(true)}
             onMapClick={handleMapClick}
             onBuildingClick={handleBuildingClick}
+            onRoadClick={handleRoadClick}
             onPlacementClick={handlePlacementClick}
             onMapRef={(map, mapboxGL) => setMapContext(map ? { map, mapboxGL } : null)}
           />

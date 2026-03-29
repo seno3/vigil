@@ -9,6 +9,8 @@ interface MapProps {
   threatBuildings?: Record<string, 'advisory' | 'warning' | 'critical'>;
   /** Building id → dominant flare category (colors extrusion when no higher threat level). */
   flareBuildings?: Record<string, TipCategory>;
+  /** Point markers for flares submitted on roads. */
+  roadFlarePoints?: Array<{ lng: number; lat: number; category: TipCategory }>;
   is3D?: boolean;
   center?: [number, number];
   locateTrigger?: number;
@@ -18,6 +20,7 @@ interface MapProps {
   onReady?: () => void;
   onMapClick?: (lng: number, lat: number) => void;
   onBuildingClick?: (lng: number, lat: number, buildingId: string) => void;
+  onRoadClick?: (lng: number, lat: number, roadId: string) => void;
   onPlacementClick?: (lng: number, lat: number) => void;
   onMapRef?: (map: any, mapboxGL: any) => void;
 }
@@ -104,6 +107,7 @@ const THREAT_LEVEL_COLORS: Record<'advisory' | 'warning' | 'critical', string> =
 export default function Map({
   threatBuildings,
   flareBuildings,
+  roadFlarePoints,
   is3D,
   center,
   locateTrigger,
@@ -113,6 +117,7 @@ export default function Map({
   onReady,
   onMapClick,
   onBuildingClick,
+  onRoadClick,
   onPlacementClick,
   onMapRef,
 }: MapProps) {
@@ -130,6 +135,7 @@ export default function Map({
   const onReadyRef = useRef(onReady);
   const exitsSourceReadyRef = useRef(false);
   const currentExitsRef = useRef<Exit[]>([]);
+  const roadFlaresSourceReadyRef = useRef(false);
   const placementMarkerRef = useRef<mapboxgl.Marker | null>(null);
 
   const syncCenter = useCallback(() => {
@@ -142,12 +148,14 @@ export default function Map({
   // Store callback refs to avoid re-running the init effect when callbacks change
   const onMapClickRef = useRef(onMapClick);
   const onBuildingClickRef = useRef(onBuildingClick);
+  const onRoadClickRef = useRef(onRoadClick);
   const onPlacementClickRef = useRef(onPlacementClick);
   const placementModeRef = useRef(placementMode);
   const threatBuildingsRef = useRef(threatBuildings);
   const onMapRefRef = useRef(onMapRef);
   useEffect(() => { onMapClickRef.current = onMapClick; }, [onMapClick]);
   useEffect(() => { onBuildingClickRef.current = onBuildingClick; }, [onBuildingClick]);
+  useEffect(() => { onRoadClickRef.current = onRoadClick; }, [onRoadClick]);
   useEffect(() => { onPlacementClickRef.current = onPlacementClick; }, [onPlacementClick]);
   useEffect(() => { onReadyRef.current = onReady; }, [onReady]);
   useEffect(() => { onMapRefRef.current = onMapRef; }, [onMapRef]);
@@ -336,6 +344,28 @@ export default function Map({
 
         applySwappedRoadLineColors(map);
 
+        // ── Road flare point markers ─────────────────────────────────────────
+        map.addSource('road-flares', {
+          type: 'geojson',
+          data: { type: 'FeatureCollection', features: [] },
+        });
+        roadFlaresSourceReadyRef.current = true;
+        map.addLayer(
+          {
+            id: 'road-flare-points',
+            type: 'circle',
+            source: 'road-flares',
+            paint: {
+              'circle-radius': ['interpolate', ['linear'], ['zoom'], 10, 4, 14, 6, 18, 9],
+              'circle-color': ['get', 'color'],
+              'circle-opacity': 0.9,
+              'circle-stroke-width': 1.5,
+              'circle-stroke-color': 'rgba(255,255,255,0.6)',
+            },
+          },
+          labelLayerId,
+        );
+
         // ── Exit GeoJSON source ──────────────────────────────────────────────
         map.addSource('exits', {
           type: 'geojson',
@@ -410,13 +440,20 @@ export default function Map({
             return;
           }
 
-          const features = map.queryRenderedFeatures(e.point, { layers: ['3d-buildings'] });
-          if (features.length > 0 && onBuildingClickRef.current) {
-            const f = features[0];
+          const buildingFeatures = map.queryRenderedFeatures(e.point, { layers: ['3d-buildings'] });
+          if (buildingFeatures.length > 0 && onBuildingClickRef.current) {
+            const f = buildingFeatures[0];
             const buildingId = String(f.id ?? f.properties?.id ?? Math.random());
             onBuildingClickRef.current(e.lngLat.lng, e.lngLat.lat, buildingId);
-          } else if (onMapClickRef.current) {
-            onMapClickRef.current(e.lngLat.lng, e.lngLat.lat);
+          } else {
+            // Check for road features (sourceLayer filter applied post-query for efficiency)
+            const allFeatures = map.queryRenderedFeatures(e.point);
+            const roadFeature = allFeatures.find(f => f.sourceLayer === 'road' && f.id != null);
+            if (roadFeature && onRoadClickRef.current) {
+              onRoadClickRef.current(e.lngLat.lng, e.lngLat.lat, `road:${roadFeature.id}`);
+            } else if (onMapClickRef.current) {
+              onMapClickRef.current(e.lngLat.lng, e.lngLat.lat);
+            }
           }
         });
 
@@ -431,6 +468,7 @@ export default function Map({
     return () => {
       cancelled = true;
       exitsSourceReadyRef.current = false;
+      roadFlaresSourceReadyRef.current = false;
       placeUserAtRef.current = null;
       onMapRefRef.current?.(null, null);
       if (watchIdRef.current !== null) navigator.geolocation.clearWatch(watchIdRef.current);
@@ -528,34 +566,47 @@ export default function Map({
     }
   }, [threatBuildings, mapLoaded, updateExitSource]);
 
-  // Flare category colors on buildings (clear removed, then set)
+  // Flare category colors on buildings and roads (clear removed, then set)
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapLoaded) return;
-    if (!map.getLayer('3d-buildings')) return;
     const fb = flareBuildings ?? {};
     const nextIds = new Set(Object.keys(fb));
-    prevFlareBuildingIds.current.forEach((id) => {
-      if (!nextIds.has(id)) {
-        try {
+
+    const setFlareState = (id: string, category: string | null) => {
+      if (id.startsWith('road:')) return; // road flares rendered as GeoJSON points, not feature state
+      try {
+        if (category) {
+          map.setFeatureState({ source: 'composite', sourceLayer: 'building', id: Number(id) }, { flareCategory: category });
+        } else {
           map.removeFeatureState({ source: 'composite', sourceLayer: 'building', id: Number(id) }, 'flareCategory');
-        } catch {
-          /* invalid id */
         }
-      }
+      } catch { /* feature id unavailable */ }
+    };
+
+    // Clear stale entries
+    prevFlareBuildingIds.current.forEach((id) => {
+      if (!nextIds.has(id)) setFlareState(id, null);
     });
     prevFlareBuildingIds.current = nextIds;
-    Object.entries(fb).forEach(([buildingId, category]) => {
-      try {
-        map.setFeatureState(
-          { source: 'composite', sourceLayer: 'building', id: Number(buildingId) },
-          { flareCategory: category },
-        );
-      } catch {
-        // Feature ID may not be available
-      }
-    });
+
+    // Apply current entries
+    Object.entries(fb).forEach(([id, category]) => setFlareState(id, category));
   }, [flareBuildings, mapLoaded]);
+
+  // Update road flare point markers
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapLoaded || !roadFlaresSourceReadyRef.current) return;
+    const src = map.getSource('road-flares') as mapboxgl.GeoJSONSource | undefined;
+    if (!src) return;
+    const features = (roadFlarePoints ?? []).map((pt) => ({
+      type: 'Feature' as const,
+      geometry: { type: 'Point' as const, coordinates: [pt.lng, pt.lat] },
+      properties: { color: FLARE_CATEGORY_COLORS[pt.category] },
+    }));
+    src.setData({ type: 'FeatureCollection', features });
+  }, [roadFlarePoints, mapLoaded]);
 
   // React to showExits toggle
   useEffect(() => {
