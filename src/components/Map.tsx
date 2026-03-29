@@ -1,15 +1,19 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { TownModel } from '@/types';
+import { forwardGeocodeUrl, reverseGeocodeUrl } from '@/lib/mapboxGeocoding';
 
 interface MapProps {
   townModel: TownModel | null;
-  onAddressSelect: (address: string) => void;
+  /** Optional lng/lat bias for server geocoding (Mapbox `proximity`) — improves ranking for suggestions / map area. */
+  onAddressSelect: (address: string, proximityHint?: { lng: number; lat: number }) => void;
   loading: boolean;
 }
 
 const DEMO_ADDRESS = 'Moore, Oklahoma';
+/** Approximate center for Moore, OK — used as geocode proximity for the demo button. */
+const DEMO_PROXIMITY = { lng: -97.4868, lat: 35.3395 };
 
 declare global {
   interface Window {
@@ -26,13 +30,24 @@ export default function Map({ townModel, onAddressSelect, loading }: MapProps) {
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [mapLoaded, setMapLoaded] = useState(false);
   const debounceRef = useRef<NodeJS.Timeout | null>(null);
+  const centerRef = useRef<{ lng: number; lat: number }>({ lng: -98.5795, lat: 39.8283 });
+
+  const syncCenter = useCallback(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const c = map.getCenter();
+    centerRef.current = { lng: c.lng, lat: c.lat };
+  }, []);
 
   useEffect(() => {
     if (!mapContainerRef.current) return;
 
     const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN ?? '';
+    let cancelled = false;
 
     import('mapbox-gl').then((mapboxgl) => {
+      if (cancelled || !mapContainerRef.current) return;
+
       mapboxglRef.current = mapboxgl.default;
       mapboxgl.default.accessToken = token;
 
@@ -43,36 +58,46 @@ export default function Map({ townModel, onAddressSelect, loading }: MapProps) {
         zoom: 3.5, // Zoomed out to show whole US
         antialias: true,
       });
+      mapRef.current = map;
+
+      if (cancelled) {
+        map.remove();
+        mapRef.current = null;
+        return;
+      }
+
+      map.on('moveend', syncCenter);
 
       map.on('load', () => {
+        if (cancelled) return;
         setMapLoaded(true);
-        mapRef.current = map;
+        syncCenter();
 
-        // Add click handler for pinpoint selection
         map.on('click', async (e) => {
           const { lng, lat } = e.lngLat;
-          const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN ?? '';
           if (!token || token === 'pk.your_mapbox_token_here') return;
 
           try {
-            const res = await fetch(
-              `https://api.mapbox.com/geocoding/v5/mapbox.places/${lng},${lat}.json?access_token=${token}`
-            );
+            const res = await fetch(reverseGeocodeUrl({ accessToken: token, lng, lat, limit: 1 }));
             const json = await res.json();
             if (json.features && json.features.length > 0) {
               const address = json.features[0].place_name;
               setSearchValue(address);
-              onAddressSelect(address);
+              onAddressSelect(address, { lng, lat });
             }
           } catch (err) {
             console.error('Reverse geocoding failed:', err);
           }
         });
       });
-
-      return () => map.remove();
     });
-  }, []);
+
+    return () => {
+      cancelled = true;
+      mapRef.current?.remove();
+      mapRef.current = null;
+    };
+  }, [onAddressSelect, syncCenter]);
 
   // Draw building footprints on map
   useEffect(() => {
@@ -155,16 +180,24 @@ export default function Map({ townModel, onAddressSelect, loading }: MapProps) {
     const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN ?? '';
     if (!token || token === 'pk.your_mapbox_token_here') return;
 
+    const { lng, lat } = centerRef.current;
+    const proximity: [number, number] = [lng, lat];
+
     try {
       const res = await fetch(
-        `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(query)}.json?country=US&types=place,address&access_token=${token}`
+        forwardGeocodeUrl({
+          accessToken: token,
+          query,
+          proximity,
+          limit: 8,
+        }),
       );
       const json = await res.json();
       setSuggestions(
-        (json.features ?? []).slice(0, 5).map((f: { place_name: string; center: [number, number] }) => ({
+        (json.features ?? []).map((f: { place_name: string; center: [number, number] }) => ({
           place_name: f.place_name,
           center: f.center,
-        }))
+        })),
       );
       setShowSuggestions(true);
     } catch {
@@ -178,10 +211,10 @@ export default function Map({ townModel, onAddressSelect, loading }: MapProps) {
     debounceRef.current = setTimeout(() => searchAddress(val), 300);
   };
 
-  const handleSelect = (address: string) => {
+  const handleSelect = (address: string, proximityHint?: { lng: number; lat: number }) => {
     setSearchValue(address);
     setShowSuggestions(false);
-    onAddressSelect(address);
+    onAddressSelect(address, proximityHint);
   };
 
   return (
@@ -198,7 +231,7 @@ export default function Map({ townModel, onAddressSelect, loading }: MapProps) {
             onChange={(e) => handleInputChange(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && searchValue.trim()) {
-                handleSelect(searchValue.trim());
+                handleSelect(searchValue.trim(), centerRef.current);
               }
             }}
             placeholder={`Try "${DEMO_ADDRESS}" for instant demo…`}
@@ -235,7 +268,9 @@ export default function Map({ townModel, onAddressSelect, loading }: MapProps) {
               {suggestions.map((s, i) => (
                 <button
                   key={i}
-                  onMouseDown={() => handleSelect(s.place_name)}
+                  onMouseDown={() =>
+                    handleSelect(s.place_name, { lng: s.center[0], lat: s.center[1] })
+                  }
                   className="w-full text-left px-4 py-2 text-sm font-mono transition-colors"
                   style={{ color: '#8899aa' }}
                   onMouseEnter={(e) => {
@@ -257,7 +292,7 @@ export default function Map({ townModel, onAddressSelect, loading }: MapProps) {
         {/* Quick demo button */}
         {!townModel && !loading && (
           <button
-            onClick={() => handleSelect(DEMO_ADDRESS)}
+            onClick={() => handleSelect(DEMO_ADDRESS, DEMO_PROXIMITY)}
             className="mt-2 px-3 py-1.5 text-xs font-mono rounded transition-all"
             style={{
               background: 'rgba(239,68,68,0.15)',

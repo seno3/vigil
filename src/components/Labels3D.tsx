@@ -3,11 +3,14 @@
 import { Html } from '@react-three/drei';
 import { Label } from '@/types';
 import { latLngToLocal } from '@/lib/geo';
+import { FLAT_SURFACE_Y } from '@/lib/sceneHeights';
 
 interface Labels3DProps {
   labels: Label[];
   centerLat: number;
   centerLng: number;
+  /** Base height above scene ground (terrain clearance) */
+  groundY?: number;
 }
 
 const SEVERITY_BORDER: Record<string, string> = {
@@ -17,7 +20,12 @@ const SEVERITY_BORDER: Record<string, string> = {
   safe: '#4ade80',
 };
 
-export default function Labels3D({ labels, centerLat, centerLng }: Labels3DProps) {
+export default function Labels3D({
+  labels,
+  centerLat,
+  centerLng,
+  groundY = FLAT_SURFACE_Y,
+}: Labels3DProps) {
   return (
     <group name="labels">
       {labels.map((label) => {
@@ -32,7 +40,7 @@ export default function Labels3D({ labels, centerLat, centerLng }: Labels3DProps
         return (
           <Html
             key={label.id}
-            position={[x, 80, z]}
+            position={[x, groundY + 80, z]}
             center
             distanceFactor={600}
             zIndexRange={[0, 10]}

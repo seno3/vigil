@@ -15,6 +15,22 @@ export interface Road {
   type: string; // primary, secondary, residential
 }
 
+/** Visual / data category for materials (rivers vs open ocean vs lakes) */
+export type WaterCategory = 'river' | 'lake' | 'ocean';
+
+/**
+ * OSM-derived water: waterway lines, inland polygons, or coastline (ocean side).
+ * Coastline: `kind: 'coastline'` — renderer expands toward sea (land on left of way per OSM).
+ */
+export interface WaterFeature {
+  id: string;
+  kind: 'line' | 'area' | 'coastline';
+  /** e.g. river, stream, pond, ocean, coastline */
+  type: string;
+  geometry: [number, number][]; // [lat, lng]
+  category: WaterCategory;
+}
+
 export interface Infrastructure {
   id: string;
   type: string; // hospital, school, fire_station, shelter
@@ -24,10 +40,17 @@ export interface Infrastructure {
 }
 
 export interface TownModel {
+  /** Local tangent-plane origin: same as geocode / Overpass `around:` center (not the mean of footprints). */
   center: { lat: number; lng: number };
   bounds: { north: number; south: number; east: number; west: number };
+  /** OSM `around:` radius (m). Features that intersect the disk are returned; geometry can extend past this. */
+  queryRadiusM: number;
+  /** Grass terrain disk radius in the 3D scene (m). Often larger than `queryRadiusM` so partial footprints stay on in-scope ground. */
+  groundRadiusM: number;
   buildings: Building[];
   roads: Road[];
+  /** Rivers, streams, lakes — from OSM water / waterway */
+  waterFeatures: WaterFeature[];
   infrastructure: Infrastructure[];
   population_estimate: number;
 }

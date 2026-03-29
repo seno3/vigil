@@ -35,25 +35,31 @@ export default function Home() {
   const [errorMsg, setErrorMsg] = useState<string | undefined>();
   const abortRef = useRef<AbortController | null>(null);
 
-  const handleAddressSelect = useCallback(async (address: string) => {
-    setState((s) => ({ ...s, status: 'loading', address, townModel: null }));
-    setErrorMsg(undefined);
+  const handleAddressSelect = useCallback(
+    async (address: string, proximityHint?: { lng: number; lat: number }) => {
+      setState((s) => ({ ...s, status: 'loading', address, townModel: null }));
+      setErrorMsg(undefined);
 
-    try {
-      const res = await fetch('/api/town-model', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ address }),
-      });
-      const json = await res.json();
-      const townModel: TownModel = json.townModel;
+      try {
+        const res = await fetch('/api/town-model', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            address,
+            ...(proximityHint ? { proximity: proximityHint } : {}),
+          }),
+        });
+        const json = await res.json();
+        const townModel: TownModel = json.townModel;
 
-      setState((s) => ({ ...s, status: 'idle', townModel }));
-    } catch (err) {
-      setErrorMsg(`Failed to load area: ${err}`);
-      setState((s) => ({ ...s, status: 'error' }));
-    }
-  }, []);
+        setState((s) => ({ ...s, status: 'idle', townModel }));
+      } catch (err) {
+        setErrorMsg(`Failed to load area: ${err}`);
+        setState((s) => ({ ...s, status: 'error' }));
+      }
+    },
+    [],
+  );
 
   const handleSimulate = useCallback(async () => {
     if (!state.townModel) return;

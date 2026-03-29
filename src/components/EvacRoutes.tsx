@@ -5,6 +5,7 @@ import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { Road, Infrastructure, EvacuationRoute } from '@/types';
 import { latLngToLocal } from '@/lib/geo';
+import { FLAT_SURFACE_Y } from '@/lib/sceneHeights';
 
 interface EvacRoutesProps {
   roads: Road[];
@@ -13,6 +14,7 @@ interface EvacRoutesProps {
   infrastructure: Infrastructure[];
   centerLat: number;
   centerLng: number;
+  groundY?: number;
 }
 
 function ShelterMarker({
@@ -41,7 +43,7 @@ function ShelterMarker({
           : '#22d3ee';
 
   return (
-    <group position={[position[0], 0, position[2]]}>
+    <group position={[position[0], position[1], position[2]]}>
       {/* Pole */}
       <mesh position={[0, 14, 0]} castShadow>
         <cylinderGeometry args={[0.45, 0.55, 28, 8]} />
@@ -80,6 +82,7 @@ export default function EvacRoutes({
   infrastructure,
   centerLat,
   centerLng,
+  groundY = FLAT_SURFACE_Y,
 }: EvacRoutesProps) {
   const evacuationRoadIds = new Set(evacuationRoutes.flatMap((r) => r.road_ids));
   const blockedSet = new Set(blockedRoads);
@@ -98,7 +101,7 @@ export default function EvacRoutes({
 
         if (localGeom.length < 2) return null;
 
-        const pts = localGeom.map(([x, z]) => new THREE.Vector3(x, 4.2, z));
+        const pts = localGeom.map(([x, z]) => new THREE.Vector3(x, groundY + 4.2, z));
         const curve = new THREE.CatmullRomCurve3(pts);
         const tubeGeom = new THREE.TubeGeometry(
           curve,
@@ -112,7 +115,7 @@ export default function EvacRoutes({
         return { id: road.id, tubeGeom, color, isBlocked };
       })
       .filter(Boolean);
-  }, [roads, evacuationRoadIds, blockedSet, centerLat, centerLng]);
+  }, [roads, evacuationRoadIds, blockedSet, centerLat, centerLng, groundY]);
 
   const shelterPositions = useMemo(() => {
     return infrastructure
@@ -125,9 +128,9 @@ export default function EvacRoutes({
       )
       .map((i) => {
         const [x, z] = latLngToLocal(i.position.lat, i.position.lng, centerLat, centerLng);
-        return { id: i.id, position: [x, 0, z] as [number, number, number], type: i.type };
+        return { id: i.id, position: [x, groundY, z] as [number, number, number], type: i.type };
       });
-  }, [infrastructure, centerLat, centerLng]);
+  }, [infrastructure, centerLat, centerLng, groundY]);
 
   return (
     <group name="evac-routes">

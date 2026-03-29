@@ -4,6 +4,7 @@ import { useMemo } from 'react';
 import * as THREE from 'three';
 import { Building, DamageLevel } from '@/types';
 import { latLngToLocal, worldDeltaToShapeXY } from '@/lib/geo';
+import { FLAT_SURFACE_Y } from '@/lib/sceneHeights';
 
 function hashSeed(s: string): number {
   let h = 0;
@@ -119,6 +120,8 @@ interface BuildingsProps {
   damageLevels: Record<string, DamageLevel>;
   centerLat: number;
   centerLng: number;
+  /** World Y of ground plane (must clear terrain hills) */
+  groundY?: number;
 }
 
 interface BuildingMeshProps {
@@ -126,9 +129,10 @@ interface BuildingMeshProps {
   damage: DamageLevel | undefined;
   centerLat: number;
   centerLng: number;
+  groundY: number;
 }
 
-function BuildingMesh({ building, damage, centerLat, centerLng }: BuildingMeshProps) {
+function BuildingMesh({ building, damage, centerLat, centerLng, groundY }: BuildingMeshProps) {
   const seed = hashSeed(building.id);
 
   const palette = basePalette(building);
@@ -225,7 +229,7 @@ function BuildingMesh({ building, damage, centerLat, centerLng }: BuildingMeshPr
         return {
           footprintGeom: wallGeom,
           roofGeom: roof,
-          position: [cx, 0, cz] as [number, number, number],
+          position: [cx, groundY, cz] as [number, number, number],
           rotation: rot,
         };
       } catch {
@@ -244,10 +248,10 @@ function BuildingMesh({ building, damage, centerLat, centerLng }: BuildingMeshPr
     return {
       footprintGeom: wallGeom,
       roofGeom: roof,
-      position: [cx, 0, cz] as [number, number, number],
+      position: [cx, groundY, cz] as [number, number, number],
       rotation: rot,
     };
-  }, [building, centerLat, centerLng, damage, seed]);
+  }, [building, centerLat, centerLng, damage, seed, groundY]);
 
   const facadeTex = useMemo(() => {
     if (typeof document === 'undefined') return null;
@@ -287,7 +291,13 @@ function BuildingMesh({ building, damage, centerLat, centerLng }: BuildingMeshPr
   );
 }
 
-export default function Buildings({ buildings, damageLevels, centerLat, centerLng }: BuildingsProps) {
+export default function Buildings({
+  buildings,
+  damageLevels,
+  centerLat,
+  centerLng,
+  groundY = FLAT_SURFACE_Y,
+}: BuildingsProps) {
   return (
     <group name="buildings">
       {buildings.map((building) => (
@@ -297,6 +307,7 @@ export default function Buildings({ buildings, damageLevels, centerLat, centerLn
           damage={damageLevels[building.id]}
           centerLat={centerLat}
           centerLng={centerLng}
+          groundY={groundY}
         />
       ))}
     </group>

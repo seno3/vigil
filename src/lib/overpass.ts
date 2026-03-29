@@ -1,4 +1,4 @@
-import { Building, Road, Infrastructure } from '@/types';
+import { Building, Road, Infrastructure, WaterFeature } from '@/types';
 
 interface OverpassNode {
   type: 'node';
@@ -200,13 +200,23 @@ export async function fetchTownData(
   lat: number,
   lng: number,
   radius: number
-): Promise<{ buildings: Building[]; roads: Road[]; infrastructure: Infrastructure[] }> {
+): Promise<{
+  buildings: Building[];
+  roads: Road[];
+  infrastructure: Infrastructure[];
+  waterFeatures: WaterFeature[];
+}> {
   const query = `
 [out:json][timeout:30];
 (
   way["building"](around:${radius},${lat},${lng});
   node["building"](around:${radius},${lat},${lng});
   way["highway"~"primary|secondary|tertiary|residential|unclassified"](around:${radius},${lat},${lng});
+  way["waterway"~"river|stream|canal|ditch|drain|tidal_channel"](around:${radius},${lat},${lng});
+  way["natural"="water"](around:${radius},${lat},${lng});
+  way["water"~"pond|basin|reservoir|ocean|sea|bay"](around:${radius},${lat},${lng});
+  way["natural"="bay"](around:${radius},${lat},${lng});
+  way["natural"="coastline"](around:4000,${lat},${lng});
   node["amenity"~"hospital|school|fire_station|shelter|community_centre"](around:${radius},${lat},${lng});
   way["amenity"~"hospital|school|fire_station|shelter|community_centre"](around:${radius},${lat},${lng});
 );
@@ -217,6 +227,7 @@ out body geom;
   const buildings: Building[] = [];
   const roads: Road[] = [];
   const infrastructure: Infrastructure[] = [];
+  const waterFeatures: WaterFeature[] = [];
 
   for (const el of data.elements) {
     if (el.type === 'way') {
@@ -247,6 +258,61 @@ out body geom;
           levels,
           material,
           area_sqm: Math.round(area),
+        });
+      } else if (tags['natural'] === 'coastline' && way.geometry && way.geometry.length >= 2) {
+        waterFeatures.push({
+          id: `wc${way.id}`,
+          kind: 'coastline',
+          type: 'coastline',
+          geometry: way.geometry.map((pt) => [pt.lat, pt.lon] as [number, number]),
+          category: 'ocean',
+        });
+      } else if (tags['natural'] === 'bay' && way.geometry && way.geometry.length >= 3) {
+        let poly: [number, number][] = way.geometry.map((pt) => [pt.lat, pt.lon] as [number, number]);
+        const a = poly[0];
+        const b = poly[poly.length - 1];
+        if (a[0] !== b[0] || a[1] !== b[1]) poly = [...poly, poly[0]];
+        waterFeatures.push({
+          id: `wb${way.id}`,
+          kind: 'area',
+          type: 'bay',
+          geometry: poly,
+          category: 'ocean',
+        });
+      } else if (tags['waterway'] && way.geometry && way.geometry.length >= 2) {
+        const wt = tags['waterway'];
+        if (wt === 'riverbank' || wt === 'dam' || wt === 'weir') continue;
+        const tidal = wt === 'tidal_channel';
+        waterFeatures.push({
+          id: `w${way.id}`,
+          kind: 'line',
+          type: wt,
+          geometry: way.geometry.map((pt) => [pt.lat, pt.lon] as [number, number]),
+          category: tidal ? 'ocean' : 'river',
+        });
+      } else if (
+        (tags['natural'] === 'water' || tags['water']) &&
+        way.geometry &&
+        way.geometry.length >= 3
+      ) {
+        let poly: [number, number][] = way.geometry.map((pt) => [pt.lat, pt.lon] as [number, number]);
+        const a = poly[0];
+        const b = poly[poly.length - 1];
+        if (a[0] !== b[0] || a[1] !== b[1]) poly = [...poly, poly[0]];
+        const wTag = (tags['water'] ?? '').toLowerCase();
+        const wType = tags['water'] ?? tags['natural'] ?? 'water';
+        const isOcean =
+          wTag === 'ocean' ||
+          wTag === 'sea' ||
+          wTag === 'bay' ||
+          wTag === 'strait' ||
+          wTag === 'lagoon';
+        waterFeatures.push({
+          id: `wa${way.id}`,
+          kind: 'area',
+          type: wType,
+          geometry: poly,
+          category: isOcean ? 'ocean' : 'lake',
         });
       } else if (tags['highway']) {
         // Road
@@ -313,5 +379,5 @@ out body geom;
     }
   }
 
-  return { buildings, roads, infrastructure };
+  return { buildings, roads, infrastructure, waterFeatures };
 }

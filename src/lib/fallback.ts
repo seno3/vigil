@@ -4,6 +4,8 @@ import { TownModel } from '@/types';
 // Coordinates: 35.3395, -97.4868
 export const DEMO_TOWN_MODEL: TownModel = {
   center: { lat: 35.3395, lng: -97.4868 },
+  queryRadiusM: 500,
+  groundRadiusM: 650,
   bounds: {
     north: 35.3467,
     south: 35.3323,
@@ -173,6 +175,33 @@ export const DEMO_TOWN_MODEL: TownModel = {
         [35.3370, -97.4950], [35.3370, -97.4868], [35.3370, -97.4788]
       ],
       type: 'residential'
+    },
+  ],
+  waterFeatures: [
+    {
+      id: 'demo_stream',
+      kind: 'line',
+      type: 'stream',
+      category: 'river',
+      geometry: [
+        [35.333, -97.4945],
+        [35.335, -97.493],
+        [35.3375, -97.4915],
+        [35.3395, -97.4905],
+      ],
+    },
+    {
+      id: 'demo_pond',
+      kind: 'area',
+      type: 'pond',
+      category: 'lake',
+      geometry: [
+        [35.3418, -97.481],
+        [35.3418, -97.4796],
+        [35.3432, -97.4796],
+        [35.3432, -97.481],
+        [35.3418, -97.481],
+      ],
     },
   ],
   infrastructure: [

@@ -1,18 +1,34 @@
+import { serverForwardGeocodeUrl } from './mapboxGeocoding';
+
 export interface GeocodedLocation {
   lat: number;
   lng: number;
   place_name: string;
 }
 
-export async function geocodeAddress(address: string): Promise<GeocodedLocation> {
+export interface GeocodeOptions {
+  /** Bias toward a point (e.g. map center or selected suggestion) — improves ambiguous queries. */
+  proximity?: { lng: number; lat: number };
+}
+
+export async function geocodeAddress(
+  address: string,
+  options?: GeocodeOptions,
+): Promise<GeocodedLocation> {
   const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
   if (!token || token === 'pk.your_mapbox_token_here') {
-    // Return Moore, OK as fallback
     return { lat: 35.3395, lng: -97.4868, place_name: 'Moore, Oklahoma, United States' };
   }
 
-  const encoded = encodeURIComponent(address);
-  const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encoded}.json?country=US&access_token=${token}`;
+  const proximity = options?.proximity
+    ? ([options.proximity.lng, options.proximity.lat] as [number, number])
+    : undefined;
+
+  const url = serverForwardGeocodeUrl({
+    accessToken: token,
+    query: address,
+    proximity,
+  });
 
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Mapbox geocoding failed: ${res.status}`);

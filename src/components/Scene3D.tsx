@@ -20,6 +20,7 @@ import {
   Label,
 } from '@/types';
 import { latLngToLocal, distanceMeters } from '@/lib/geo';
+import { FLAT_SURFACE_Y, ORBIT_MAX_DISTANCE } from '@/lib/sceneHeights';
 import Buildings from './Buildings';
 import TornadoVis from './TornadoVis';
 import EvacRoutes from './EvacRoutes';
@@ -27,6 +28,7 @@ import Labels3D from './Labels3D';
 import TimeSlider from './TimeSlider';
 import { TerrainGround, Atmosphere } from './TerrainSky';
 import RoadNetwork from './RoadNetwork';
+import WaterFeatures from './WaterFeatures';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const PLAYBACK_DURATION = 20; // seconds to traverse full path
@@ -54,10 +56,12 @@ function PulsingWaypoint({
   x,
   z,
   geom,
+  groundY,
 }: {
   x: number;
   z: number;
   geom: THREE.BufferGeometry;
+  groundY: number;
 }) {
   const ref = useRef<THREE.Mesh>(null);
 
@@ -68,7 +72,7 @@ function PulsingWaypoint({
   });
 
   return (
-    <mesh ref={ref} geometry={geom} position={[x, 0.5, z]} rotation={[-Math.PI / 2, 0, 0]}>
+    <mesh ref={ref} geometry={geom} position={[x, groundY + 0.5, z]} rotation={[-Math.PI / 2, 0, 0]}>
       <meshStandardMaterial color="white" transparent opacity={0.9} depthWrite={false} />
     </mesh>
   );
@@ -80,11 +84,13 @@ function WaypointDots({
   currentSegIdx,
   centerLat,
   centerLng,
+  groundY,
 }: {
   pathSegments: PathSegment[];
   currentSegIdx: number;
   centerLat: number;
   centerLng: number;
+  groundY: number;
 }) {
   const discGeom = useMemo(() => new THREE.CylinderGeometry(8, 8, 0.5, 16), []);
 
@@ -100,14 +106,14 @@ function WaypointDots({
     <>
       {positions.map(([x, z], i) => {
         if (i === currentSegIdx) {
-          return <PulsingWaypoint key={i} x={x} z={z} geom={discGeom} />;
+          return <PulsingWaypoint key={i} x={x} z={z} geom={discGeom} groundY={groundY} />;
         }
         const ahead = i > currentSegIdx;
         return (
           <mesh
             key={i}
             geometry={discGeom}
-            position={[x, 0.5, z]}
+            position={[x, groundY + 0.5, z]}
             rotation={[-Math.PI / 2, 0, 0]}
           >
             <meshStandardMaterial
@@ -246,7 +252,7 @@ function SceneContent({
       .slice(0, currentSegIdx + 2)
       .map((seg) => {
         const [x, z] = latLngToLocal(seg.lat, seg.lng, centerLat, centerLng);
-        return new THREE.Vector3(x, 1, z);
+        return new THREE.Vector3(x, FLAT_SURFACE_Y + 1, z);
       });
     if (pts.length < 2) return null;
     const geom = new THREE.BufferGeometry().setFromPoints(pts);
@@ -260,7 +266,7 @@ function SceneContent({
       .slice(Math.max(0, currentSegIdx))
       .map((seg) => {
         const [x, z] = latLngToLocal(seg.lat, seg.lng, centerLat, centerLng);
-        return new THREE.Vector3(x, 1, z);
+        return new THREE.Vector3(x, FLAT_SURFACE_Y + 1, z);
       });
     if (pts.length < 2) return null;
     const geom = new THREE.BufferGeometry().setFromPoints(pts);
@@ -272,7 +278,17 @@ function SceneContent({
     <>
       <Atmosphere />
       <Environment preset="city" environmentIntensity={0.42} />
-      <TerrainGround size={3600} segments={112} />
+      <TerrainGround
+        scopeRadiusM={townModel.groundRadiusM ?? townModel.queryRadiusM ?? 500}
+        segments={112}
+      />
+      {(townModel.waterFeatures ?? []).length > 0 && (
+        <WaterFeatures
+          features={townModel.waterFeatures ?? []}
+          centerLat={centerLat}
+          centerLng={centerLng}
+        />
+      )}
       {townModel.roads.length > 0 && (
         <RoadNetwork roads={townModel.roads} centerLat={centerLat} centerLng={centerLng} />
       )}
@@ -296,6 +312,7 @@ function SceneContent({
           currentSegIdx={currentSegIdx}
           centerLat={centerLat}
           centerLng={centerLng}
+          groundY={FLAT_SURFACE_Y}
         />
       )}
 
@@ -308,6 +325,7 @@ function SceneContent({
           wind_speed_mph={currentWind}
           centerLat={centerLat}
           centerLng={centerLng}
+          groundY={FLAT_SURFACE_Y}
         />
       )}
 
@@ -322,12 +340,18 @@ function SceneContent({
           infrastructure={townModel.infrastructure}
           centerLat={centerLat}
           centerLng={centerLng}
+          groundY={FLAT_SURFACE_Y}
         />
       )}
 
       {/* Labels */}
       {allLabels.length > 0 && (
-        <Labels3D labels={allLabels} centerLat={centerLat} centerLng={centerLng} />
+        <Labels3D
+          labels={allLabels}
+          centerLat={centerLat}
+          centerLng={centerLng}
+          groundY={FLAT_SURFACE_Y}
+        />
       )}
     </>
   );
@@ -386,9 +410,9 @@ export default function Scene3D({ townModel, agentOutputs }: Scene3DProps) {
           enableZoom
           enableRotate
           minDistance={100}
-          maxDistance={3000}
+          maxDistance={ORBIT_MAX_DISTANCE}
           maxPolarAngle={Math.PI / 2.1}
-          target={[0, 0, 0]}
+          target={[0, FLAT_SURFACE_Y, 0]}
         />
       </Canvas>
 

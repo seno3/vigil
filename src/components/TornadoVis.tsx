@@ -4,6 +4,7 @@ import { useRef, useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { latLngToLocal } from '@/lib/geo';
+import { FLAT_SURFACE_Y } from '@/lib/sceneHeights';
 
 // Props: single interpolated position (computed by SceneContent animation loop)
 export interface TornadoVisProps {
@@ -13,6 +14,8 @@ export interface TornadoVisProps {
   wind_speed_mph: number;
   centerLat: number;
   centerLng: number;
+  /** World Y where the funnel meets the ground (must clear terrain) */
+  groundY?: number;
 }
 
 // ─── Ground shadow: pulsing circle under the funnel ──────────────────────────
@@ -272,9 +275,10 @@ export default function TornadoVis({
   width_m,
   centerLat,
   centerLng,
+  groundY = FLAT_SURFACE_Y,
 }: TornadoVisProps) {
   const [x, z] = latLngToLocal(lat, lng, centerLat, centerLng);
-  const funnelPos: [number, number, number] = [x, 0, z];
+  const funnelPos: [number, number, number] = [x, groundY, z];
 
   return (
     <group name="tornado">
