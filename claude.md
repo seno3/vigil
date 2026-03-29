@@ -15,7 +15,7 @@ Real-time community threat intelligence. Users submit anonymous safety tips, AI 
 - `api/simulate/route.ts`, `lib/agents.ts`
 
 ## Tech Stack
-Next.js 14, Mapbox GL JS (dark-v11 + fill-extrusion), MongoDB (mongoose), Socket.IO, Redis, Gemini 2.5 Flash, Tailwind CSS, Vultr
+Next.js 14, Mapbox GL JS (dark-v11 + fill-extrusion), MongoDB (mongoose), Socket.IO, Redis, Gemini 2.5 Flash, Tailwind CSS
 
 ## Design System
 - Frosted glass everywhere: `bg-white/15 backdrop-blur-xl border border-white/30`
