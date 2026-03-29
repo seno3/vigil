@@ -43,7 +43,7 @@ export default function NotificationFeed({ lng, lat, radius }: NotificationFeedP
   const filtered = filter === 'all' ? tips : tips.filter(t => t.category === filter);
 
   return (
-    <div style={{ width: '320px', height: '100%', display: 'flex', flexDirection: 'column', background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(20px)', borderLeft: '1px solid rgba(255,255,255,0.08)', fontFamily: 'ui-monospace, monospace' }}>
+    <div style={{ width: '320px', height: '100%', display: 'flex', flexDirection: 'column', background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(20px)', borderLeft: '1px solid rgba(255,255,255,0.08)', fontFamily: 'var(--font-sans, sans-serif)' }}>
       <div style={{ padding: '16px 16px 0', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
         <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.4)', letterSpacing: '0.25em', marginBottom: '12px' }}>LIVE FEED</div>
         <div style={{ display: 'flex', gap: '4px', paddingBottom: '12px', overflowX: 'auto' }}>

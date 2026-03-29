@@ -7,6 +7,8 @@ interface MapProps {
   threatBuildings?: Record<string, 'advisory' | 'warning' | 'critical'>;
   is3D?: boolean;
   center?: [number, number];
+  locateTrigger?: number;
+  onFlyEnd?: () => void;
   onMapClick?: (lng: number, lat: number) => void;
   onBuildingClick?: (lng: number, lat: number, buildingId: string) => void;
 }
@@ -17,12 +19,18 @@ declare global {
   }
 }
 
-export default function Map({ threatBuildings, is3D, center, onMapClick, onBuildingClick }: MapProps) {
+export default function Map({ threatBuildings, is3D, center, locateTrigger, onFlyEnd, onMapClick, onBuildingClick }: MapProps) {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const mapboxglRef = useRef<any>(null);
   const [mapLoaded, setMapLoaded] = useState(false);
   const centerRef = useRef<{ lng: number; lat: number }>({ lng: -98.5795, lat: 39.8283 });
+  const userMarkerRef = useRef<mapboxgl.Marker | null>(null);
+  const watchIdRef = useRef<number | null>(null);
+  const markerAddedRef = useRef(false);
+  const userPosRef = useRef<[number, number] | null>(null);
+  const onFlyEndRef = useRef(onFlyEnd);
+  const flyEndFiredRef = useRef(false);
 
   const syncCenter = useCallback(() => {
     const map = mapRef.current;
@@ -36,6 +44,7 @@ export default function Map({ threatBuildings, is3D, center, onMapClick, onBuild
   const onBuildingClickRef = useRef(onBuildingClick);
   useEffect(() => { onMapClickRef.current = onMapClick; }, [onMapClick]);
   useEffect(() => { onBuildingClickRef.current = onBuildingClick; }, [onBuildingClick]);
+  useEffect(() => { onFlyEndRef.current = onFlyEnd; }, [onFlyEnd]);
 
   useEffect(() => {
     if (!mapContainerRef.current) return;
@@ -54,6 +63,8 @@ export default function Map({ threatBuildings, is3D, center, onMapClick, onBuild
         style: 'mapbox://styles/mapbox/dark-v11',
         center: [-98.5795, 39.8283],
         zoom: 3.5,
+        pitch: 45,
+        bearing: -17.6,
         antialias: true,
       });
       mapRef.current = map;
@@ -65,6 +76,43 @@ export default function Map({ threatBuildings, is3D, center, onMapClick, onBuild
       }
 
       map.on('moveend', syncCenter);
+
+      // Inject pulse keyframe once
+      if (!document.getElementById('user-loc-style')) {
+        const s = document.createElement('style');
+        s.id = 'user-loc-style';
+        s.textContent = '@keyframes userLocPulse { from { transform: scale(0.5); opacity: 0.6; } to { transform: scale(1.5); opacity: 0; } }';
+        document.head.appendChild(s);
+      }
+
+      // Build custom marker element
+      const markerEl = document.createElement('div');
+      markerEl.style.cssText = 'position:relative;width:36px;height:36px;pointer-events:none;';
+      const ring = document.createElement('div');
+      ring.style.cssText = 'position:absolute;inset:0;border-radius:50%;border:2px solid rgba(59,130,246,0.5);animation:userLocPulse 2s ease-out infinite;';
+      const dot = document.createElement('div');
+      dot.style.cssText = 'position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:14px;height:14px;border-radius:50%;background:#3b82f6;border:2.5px solid #ffffff;box-shadow:0 2px 8px rgba(59,130,246,0.6);';
+      markerEl.appendChild(ring);
+      markerEl.appendChild(dot);
+
+      const userMarker = new mapboxgl.default.Marker({ element: markerEl, anchor: 'center' });
+      userMarkerRef.current = userMarker;
+
+      if ('geolocation' in navigator) {
+        watchIdRef.current = navigator.geolocation.watchPosition(
+          (pos) => {
+            const { longitude, latitude } = pos.coords;
+            userPosRef.current = [longitude, latitude];
+            userMarker.setLngLat([longitude, latitude]);
+            if (!markerAddedRef.current) {
+              userMarker.addTo(map);
+              markerAddedRef.current = true;
+            }
+          },
+          () => { /* denied or unavailable — render nothing */ },
+          { enableHighAccuracy: true },
+        );
+      }
 
       map.on('load', () => {
         if (cancelled) return;
@@ -126,6 +174,9 @@ export default function Map({ threatBuildings, is3D, center, onMapClick, onBuild
 
     return () => {
       cancelled = true;
+      if (watchIdRef.current !== null) navigator.geolocation.clearWatch(watchIdRef.current);
+      userMarkerRef.current?.remove();
+      markerAddedRef.current = false;
       mapRef.current?.remove();
       mapRef.current = null;
     };
@@ -143,7 +194,28 @@ export default function Map({ threatBuildings, is3D, center, onMapClick, onBuild
     const map = mapRef.current;
     if (!map || !mapLoaded || !center) return;
     map.flyTo({ center, zoom: 14, duration: 1000 });
+    if (onFlyEndRef.current && !flyEndFiredRef.current) {
+      flyEndFiredRef.current = true;
+      map.once('moveend', () => onFlyEndRef.current?.());
+    }
   }, [center, mapLoaded]);
+
+  // Fly to user's current position on locate trigger
+  useEffect(() => {
+    if (!locateTrigger) return;
+    const map = mapRef.current;
+    if (!map || !mapLoaded) return;
+    if (userPosRef.current) {
+      map.flyTo({ center: userPosRef.current, zoom: 15, duration: 1200 });
+    } else {
+      // watchPosition hasn't fired yet — fall back to getCurrentPosition
+      navigator.geolocation?.getCurrentPosition(
+        (pos) => map.flyTo({ center: [pos.coords.longitude, pos.coords.latitude], zoom: 15, duration: 1200 }),
+        () => {},
+        { enableHighAccuracy: true },
+      );
+    }
+  }, [locateTrigger, mapLoaded]);
 
   // React to threatBuildings changes
   useEffect(() => {
