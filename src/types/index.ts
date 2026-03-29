@@ -71,6 +71,9 @@ export interface Tip {
   description: string;
   urgency: TipUrgency;
   credibilityScore: number;
+  /** Distinct users who upvoted this flare (server may omit raw ids; use upvoteCount / hasUpvoted). */
+  upvoteCount?: number;
+  hasUpvoted?: boolean;
   status: TipStatus;
   agentAnalysis?: { classification: string; threatLevel: string; reasoning: string };
   createdAt: string;

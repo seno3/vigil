@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getAuthUser } from '@/lib/auth';
-import { createTip, getTipsInArea } from '@/lib/db/tips';
+import { createTip, formatTipForClient, getTipsInArea } from '@/lib/db/tips';
 import { findById } from '@/lib/db/users';
 import { processTip } from '@/lib/agents/orchestrator';
 
@@ -9,8 +9,10 @@ export async function GET(req: Request) {
   const lng = parseFloat(searchParams.get('lng') ?? '0');
   const lat = parseFloat(searchParams.get('lat') ?? '0');
   const radius = parseFloat(searchParams.get('radius') ?? '1609');
+  const viewerId = await getAuthUser(req);
   const tips = await getTipsInArea(lng, lat, radius);
-  return NextResponse.json(tips);
+  const payload = tips.map((t) => formatTipForClient(t, viewerId));
+  return NextResponse.json(payload);
 }
 
 export async function POST(req: Request) {
@@ -39,5 +41,5 @@ export async function POST(req: Request) {
   // Process async — don't block the response
   processTip(tip).catch(console.error);
 
-  return NextResponse.json(tip, { status: 201 });
+  return NextResponse.json(formatTipForClient(tip, userId), { status: 201 });
 }

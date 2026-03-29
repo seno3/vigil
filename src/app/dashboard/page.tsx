@@ -209,7 +209,7 @@ export default function DashboardPage() {
         </div>
 
         {/* Feed panel */}
-        <NotificationFeed lng={center[0]} lat={center[1]} radius={radius} />
+        <NotificationFeed lng={center[0]} lat={center[1]} radius={radius} user={user} />
       </div>
 
       {tipModal && <TipModal {...tipModal} onClose={() => setTipModal(null)} onSubmit={handleTipSubmit} />}

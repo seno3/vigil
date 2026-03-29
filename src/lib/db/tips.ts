@@ -10,6 +10,7 @@ export interface ITip extends Document {
   description: string;
   urgency: TipUrgency;
   credibilityScore: number;
+  upvotedBy: mongoose.Types.ObjectId[];
   status: TipStatus;
   corroboratingTips: mongoose.Types.ObjectId[];
   contradictingTips: mongoose.Types.ObjectId[];
@@ -29,6 +30,7 @@ const tipSchema = new Schema<ITip>({
   description:  { type: String, required: true },
   urgency:      { type: String, default: 'medium' },
   credibilityScore: { type: Number, default: 50 },
+  upvotedBy:    [{ type: Schema.Types.ObjectId, ref: 'User' }],
   status:       { type: String, default: 'pending' },
   corroboratingTips: [{ type: Schema.Types.ObjectId, ref: 'Tip' }],
   contradictingTips: [{ type: Schema.Types.ObjectId, ref: 'Tip' }],
@@ -42,8 +44,61 @@ const tipSchema = new Schema<ITip>({
 });
 tipSchema.index({ location: '2dsphere' });
 
+const UPVOTE_CREDIBILITY_DELTA = 2;
+const MAX_TIP_CREDIBILITY = 100;
+
 function getTipModel(): Model<ITip> {
   return mongoose.models.Tip as Model<ITip> || mongoose.model<ITip>('Tip', tipSchema);
+}
+
+export async function upvoteTip(
+  tipId: string,
+  voterUserId: string,
+): Promise<
+  | { ok: true; credibilityScore: number; upvoteCount: number; already: boolean }
+  | { ok: false; reason: 'not_found' | 'own_tip' }
+> {
+  await connectDB();
+  const Tip = getTipModel();
+  const voterOid = new mongoose.Types.ObjectId(voterUserId);
+
+  const updated = await Tip.findOneAndUpdate(
+    {
+      _id: tipId,
+      userId: { $ne: voterOid },
+      $expr: {
+        $not: { $in: [voterOid, { $ifNull: ['$upvotedBy', []] }] },
+      },
+    },
+    {
+      $addToSet: { upvotedBy: voterOid },
+      $inc: { credibilityScore: UPVOTE_CREDIBILITY_DELTA },
+    },
+    { new: true },
+  );
+
+  if (updated) {
+    if (updated.credibilityScore > MAX_TIP_CREDIBILITY) {
+      updated.credibilityScore = MAX_TIP_CREDIBILITY;
+      await updated.save();
+    }
+    const count = updated.upvotedBy?.length ?? 0;
+    return { ok: true, credibilityScore: updated.credibilityScore, upvoteCount: count, already: false };
+  }
+
+  const tip = await Tip.findById(tipId).lean();
+  if (!tip) return { ok: false, reason: 'not_found' };
+  if (String(tip.userId) === voterUserId) return { ok: false, reason: 'own_tip' };
+  const ids = (tip.upvotedBy ?? []).map((id) => String(id));
+  if (ids.includes(voterUserId)) {
+    return {
+      ok: true,
+      credibilityScore: tip.credibilityScore,
+      upvoteCount: ids.length,
+      already: true,
+    };
+  }
+  return { ok: false, reason: 'not_found' };
 }
 
 export async function createTip(data: {
@@ -74,6 +129,37 @@ export async function getTipsInArea(
   };
   if (since) query.createdAt = { $gte: since };
   return getTipModel().find(query).sort({ createdAt: -1 }).limit(100);
+}
+
+/** JSON for API clients — omits raw `upvotedBy`, adds `upvoteCount` and `hasUpvoted`. */
+export function formatTipForClient(
+  doc: ITip | Record<string, unknown>,
+  currentUserId: string | null,
+): Record<string, unknown> {
+  const o: Record<string, unknown> =
+    doc && typeof (doc as ITip).toObject === 'function'
+      ? ((doc as ITip).toObject() as Record<string, unknown>)
+      : (doc as Record<string, unknown>);
+  const raw = o.upvotedBy as unknown[] | undefined;
+  const ids = (raw ?? []).map((id) => String(id));
+  const createdAt = o.createdAt;
+  const expiresAt = o.expiresAt;
+  return {
+    _id: String(o._id),
+    userId: String(o.userId),
+    location: o.location,
+    buildingId: o.buildingId,
+    category: o.category,
+    description: o.description,
+    urgency: o.urgency,
+    credibilityScore: o.credibilityScore,
+    status: o.status,
+    agentAnalysis: o.agentAnalysis,
+    createdAt: createdAt instanceof Date ? createdAt.toISOString() : createdAt,
+    expiresAt: expiresAt instanceof Date ? expiresAt.toISOString() : expiresAt,
+    upvoteCount: ids.length,
+    hasUpvoted: Boolean(currentUserId && ids.includes(currentUserId)),
+  };
 }
 
 export async function getTipsForBuilding(buildingId: string, since?: Date): Promise<ITip[]> {
