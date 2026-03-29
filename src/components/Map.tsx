@@ -1,19 +1,15 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { TownModel } from '@/types';
 import { forwardGeocodeUrl, reverseGeocodeUrl } from '@/lib/mapboxGeocoding';
 
 interface MapProps {
-  townModel: TownModel | null;
-  /** Optional lng/lat bias for server geocoding (Mapbox `proximity`) — improves ranking for suggestions / map area. */
-  onAddressSelect: (address: string, proximityHint?: { lng: number; lat: number }) => void;
-  loading: boolean;
+  threatBuildings?: Record<string, 'advisory' | 'warning' | 'critical'>;
+  is3D?: boolean;
+  center?: [number, number];
+  onMapClick?: (lng: number, lat: number) => void;
+  onBuildingClick?: (lng: number, lat: number, buildingId: string) => void;
 }
-
-const DEMO_ADDRESS = 'Moore, Oklahoma';
-/** Approximate center for Moore, OK — used as geocode proximity for the demo button. */
-const DEMO_PROXIMITY = { lng: -97.4868, lat: 35.3395 };
 
 declare global {
   interface Window {
@@ -21,15 +17,11 @@ declare global {
   }
 }
 
-export default function Map({ townModel, onAddressSelect, loading }: MapProps) {
+export default function Map({ threatBuildings, is3D, center, onMapClick, onBuildingClick }: MapProps) {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const mapboxglRef = useRef<any>(null);
-  const [searchValue, setSearchValue] = useState('');
-  const [suggestions, setSuggestions] = useState<Array<{ place_name: string; center: [number, number] }>>([]);
-  const [showSuggestions, setShowSuggestions] = useState(false);
   const [mapLoaded, setMapLoaded] = useState(false);
-  const debounceRef = useRef<NodeJS.Timeout | null>(null);
   const centerRef = useRef<{ lng: number; lat: number }>({ lng: -98.5795, lat: 39.8283 });
 
   const syncCenter = useCallback(() => {
@@ -38,6 +30,12 @@ export default function Map({ townModel, onAddressSelect, loading }: MapProps) {
     const c = map.getCenter();
     centerRef.current = { lng: c.lng, lat: c.lat };
   }, []);
+
+  // Store callback refs to avoid re-running the init effect when callbacks change
+  const onMapClickRef = useRef(onMapClick);
+  const onBuildingClickRef = useRef(onBuildingClick);
+  useEffect(() => { onMapClickRef.current = onMapClick; }, [onMapClick]);
+  useEffect(() => { onBuildingClickRef.current = onBuildingClick; }, [onBuildingClick]);
 
   useEffect(() => {
     if (!mapContainerRef.current) return;
@@ -54,8 +52,8 @@ export default function Map({ townModel, onAddressSelect, loading }: MapProps) {
       const map = new mapboxgl.default.Map({
         container: mapContainerRef.current!,
         style: 'mapbox://styles/mapbox/dark-v11',
-        center: [-98.5795, 39.8283], // Center of the US
-        zoom: 3.5, // Zoomed out to show whole US
+        center: [-98.5795, 39.8283],
+        zoom: 3.5,
         antialias: true,
       });
       mapRef.current = map;
@@ -73,22 +71,56 @@ export default function Map({ townModel, onAddressSelect, loading }: MapProps) {
         setMapLoaded(true);
         syncCenter();
 
-        map.on('click', async (e) => {
-          const { lng, lat } = e.lngLat;
-          if (!token || token === 'pk.your_mapbox_token_here') return;
-
-          try {
-            const res = await fetch(reverseGeocodeUrl({ accessToken: token, lng, lat, limit: 1 }));
-            const json = await res.json();
-            if (json.features && json.features.length > 0) {
-              const address = json.features[0].place_name;
-              setSearchValue(address);
-              onAddressSelect(address, { lng, lat });
+        // 3D buildings layer
+        const layers = map.getStyle().layers;
+        let labelLayerId: string | undefined;
+        if (layers) {
+          for (const layer of layers) {
+            if (layer.type === 'symbol' && (layer.layout as any)?.['text-field']) {
+              labelLayerId = layer.id;
+              break;
             }
-          } catch (err) {
-            console.error('Reverse geocoding failed:', err);
+          }
+        }
+
+        map.addLayer(
+          {
+            id: '3d-buildings',
+            source: 'composite',
+            'source-layer': 'building',
+            filter: ['==', 'extrude', 'true'],
+            type: 'fill-extrusion',
+            minzoom: 14,
+            paint: {
+              'fill-extrusion-color': [
+                'case',
+                ['boolean', ['feature-state', 'threatLevel'], false],
+                '#ef4444',
+                '#1a2535',
+              ],
+              'fill-extrusion-height': ['interpolate', ['linear'], ['zoom'], 14, 0, 14.05, ['get', 'height']],
+              'fill-extrusion-base': ['interpolate', ['linear'], ['zoom'], 14, 0, 14.05, ['get', 'min_height']],
+              'fill-extrusion-opacity': 0.7,
+            },
+          },
+          labelLayerId,
+        );
+
+        // Click handler — building or map
+        map.on('click', (e) => {
+          const features = map.queryRenderedFeatures(e.point, { layers: ['3d-buildings'] });
+          if (features.length > 0 && onBuildingClickRef.current) {
+            const f = features[0];
+            const buildingId = String(f.id ?? f.properties?.id ?? Math.random());
+            onBuildingClickRef.current(e.lngLat.lng, e.lngLat.lat, buildingId);
+          } else if (onMapClickRef.current) {
+            onMapClickRef.current(e.lngLat.lng, e.lngLat.lat);
           }
         });
+
+        // Change cursor on building hover
+        map.on('mouseenter', '3d-buildings', () => { map.getCanvas().style.cursor = 'pointer'; });
+        map.on('mouseleave', '3d-buildings', () => { map.getCanvas().style.cursor = ''; });
       });
     });
 
@@ -97,229 +129,42 @@ export default function Map({ townModel, onAddressSelect, loading }: MapProps) {
       mapRef.current?.remove();
       mapRef.current = null;
     };
-  }, [onAddressSelect, syncCenter]);
+  }, [syncCenter]);
 
-  // Building footprints only — streets render in the 3D scene (RoadNetwork), not on this picker map
+  // React to is3D prop changes
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !mapLoaded || !townModel) return;
+    if (!map || !mapLoaded) return;
+    map.easeTo({ pitch: is3D ? 45 : 0, bearing: is3D ? -17.6 : 0, duration: 800 });
+  }, [is3D, mapLoaded]);
 
-    ['buildings-fill', 'buildings-outline', 'roads-line', 'roads-casing'].forEach((id) => {
-      if (map.getLayer(id)) map.removeLayer(id);
+  // React to center prop changes
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapLoaded || !center) return;
+    map.flyTo({ center, zoom: 14, duration: 1000 });
+  }, [center, mapLoaded]);
+
+  // React to threatBuildings changes
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapLoaded || !threatBuildings) return;
+    if (!map.getLayer('3d-buildings')) return;
+    Object.entries(threatBuildings).forEach(([buildingId, level]) => {
+      try {
+        map.setFeatureState(
+          { source: 'composite', sourceLayer: 'building', id: buildingId },
+          { threatLevel: level },
+        );
+      } catch {
+        // Feature ID may not be available — skip gracefully
+      }
     });
-    if (map.getSource('buildings')) map.removeSource('buildings');
-    if (map.getSource('roads')) map.removeSource('roads');
-
-    const features = townModel.buildings.map((b) => ({
-      type: 'Feature' as const,
-      properties: { id: b.id, type: b.type, material: b.material, levels: b.levels },
-      geometry: {
-        type: 'Polygon' as const,
-        coordinates: [b.polygon.map(([lat, lng]) => [lng, lat])],
-      },
-    }));
-
-    map.addSource('buildings', {
-      type: 'geojson',
-      data: { type: 'FeatureCollection', features },
-    });
-
-    map.addLayer({
-      id: 'buildings-fill',
-      type: 'fill',
-      source: 'buildings',
-      paint: {
-        'fill-color': [
-          'match',
-          ['get', 'type'],
-          'hospital', '#ef4444',
-          'school', '#f97316',
-          'commercial', '#ecc94b',
-          'industrial', '#8899aa',
-          '#4a7fa5',
-        ],
-        'fill-opacity': 0.55,
-      },
-    });
-
-    map.addLayer({
-      id: 'buildings-outline',
-      type: 'line',
-      source: 'buildings',
-      paint: {
-        'line-color': '#22d3ee',
-        'line-width': 0.8,
-        'line-opacity': 0.6,
-      },
-    });
-
-    map.flyTo({
-      center: [townModel.center.lng, townModel.center.lat],
-      zoom: 14,
-      duration: 1000,
-    });
-
-    if (mapboxglRef.current && features.length > 0) {
-      const bounds = new mapboxglRef.current.LngLatBounds();
-      features.forEach((f) => {
-        f.geometry.coordinates[0].forEach((coord) => {
-          const [lng, lat] = coord as [number, number];
-          bounds.extend([lng, lat]);
-        });
-      });
-      map.fitBounds(bounds, { padding: 50, maxZoom: 16, duration: 1000 });
-    }
-  }, [townModel, mapLoaded]);
-
-  const searchAddress = async (query: string) => {
-    if (!query.trim() || query.length < 3) {
-      setSuggestions([]);
-      return;
-    }
-    const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN ?? '';
-    if (!token || token === 'pk.your_mapbox_token_here') return;
-
-    const { lng, lat } = centerRef.current;
-    const proximity: [number, number] = [lng, lat];
-
-    try {
-      const res = await fetch(
-        forwardGeocodeUrl({
-          accessToken: token,
-          query,
-          proximity,
-          limit: 8,
-        }),
-      );
-      const json = await res.json();
-      setSuggestions(
-        (json.features ?? []).map((f: { place_name: string; center: [number, number] }) => ({
-          place_name: f.place_name,
-          center: f.center,
-        })),
-      );
-      setShowSuggestions(true);
-    } catch {
-      setSuggestions([]);
-    }
-  };
-
-  const handleInputChange = (val: string) => {
-    setSearchValue(val);
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => searchAddress(val), 300);
-  };
-
-  const handleSelect = (address: string, proximityHint?: { lng: number; lat: number }) => {
-    setSearchValue(address);
-    setShowSuggestions(false);
-    onAddressSelect(address, proximityHint);
-  };
+  }, [threatBuildings, mapLoaded]);
 
   return (
     <div className="relative w-full h-full">
-      {/* Map container */}
       <div ref={mapContainerRef} className="w-full h-full" />
-
-      {/* Search overlay */}
-      <div className="absolute top-4 left-4 right-4 z-10">
-        <div className="relative max-w-lg">
-          <input
-            type="text"
-            value={searchValue}
-            onChange={(e) => handleInputChange(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && searchValue.trim()) {
-                handleSelect(searchValue.trim(), centerRef.current);
-              }
-            }}
-            placeholder={`Try "${DEMO_ADDRESS}" for instant demo…`}
-            className="w-full px-4 py-2.5 text-sm font-mono rounded"
-            style={{
-              background: 'rgba(10,14,23,0.92)',
-              border: '1px solid #1e2a3a',
-              color: '#f0f4f8',
-              outline: 'none',
-              backdropFilter: 'blur(8px)',
-            }}
-            onFocus={() => suggestions.length > 0 && setShowSuggestions(true)}
-            onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
-          />
-          {loading && (
-            <div className="absolute right-3 top-1/2 -translate-y-1/2">
-              <span
-                className="inline-block w-4 h-4 border-2 border-t-transparent rounded-full animate-spin"
-                style={{ borderColor: '#ef4444', borderTopColor: 'transparent' }}
-              />
-            </div>
-          )}
-
-          {/* Suggestions dropdown */}
-          {showSuggestions && suggestions.length > 0 && (
-            <div
-              className="absolute top-full mt-1 w-full rounded overflow-hidden"
-              style={{
-                background: 'rgba(20,25,38,0.97)',
-                border: '1px solid #1e2a3a',
-                backdropFilter: 'blur(8px)',
-              }}
-            >
-              {suggestions.map((s, i) => (
-                <button
-                  key={i}
-                  onMouseDown={() =>
-                    handleSelect(s.place_name, { lng: s.center[0], lat: s.center[1] })
-                  }
-                  className="w-full text-left px-4 py-2 text-sm font-mono transition-colors"
-                  style={{ color: '#8899aa' }}
-                  onMouseEnter={(e) => {
-                    (e.currentTarget as HTMLButtonElement).style.background = '#1e2a3a';
-                    (e.currentTarget as HTMLButtonElement).style.color = '#f0f4f8';
-                  }}
-                  onMouseLeave={(e) => {
-                    (e.currentTarget as HTMLButtonElement).style.background = 'transparent';
-                    (e.currentTarget as HTMLButtonElement).style.color = '#8899aa';
-                  }}
-                >
-                  {s.place_name}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Quick demo button */}
-        {!townModel && !loading && (
-          <button
-            onClick={() => handleSelect(DEMO_ADDRESS, DEMO_PROXIMITY)}
-            className="mt-2 px-3 py-1.5 text-xs font-mono rounded transition-all"
-            style={{
-              background: 'rgba(239,68,68,0.15)',
-              border: '1px solid rgba(239,68,68,0.4)',
-              color: '#ef4444',
-            }}
-          >
-            ▶ LOAD DEMO: Moore, Oklahoma
-          </button>
-        )}
-      </div>
-
-      {/* Building count overlay */}
-      {townModel && (
-        <div
-          className="absolute bottom-4 left-4 px-3 py-2 rounded font-mono text-xs"
-          style={{
-            background: 'rgba(10,14,23,0.88)',
-            border: '1px solid #1e2a3a',
-            backdropFilter: 'blur(4px)',
-          }}
-        >
-          <span className="text-[#22d3ee]">{townModel.buildings.length}</span>
-          <span className="text-[#556677]"> buildings loaded · </span>
-          <span className="text-[#4ade80]">ready to simulate</span>
-        </div>
-      )}
-
       {/* Tactical overlay */}
       <div
         className="absolute inset-0 pointer-events-none"

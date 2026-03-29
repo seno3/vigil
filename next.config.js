@@ -5,7 +5,7 @@ const nextConfig = {
     return config;
   },
   experimental: {
-    serverComponentsExternalPackages: ['@google/generative-ai'],
+    serverComponentsExternalPackages: ['@google/generative-ai', 'mongoose'],
   },
 };
 
