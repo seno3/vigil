@@ -162,6 +162,11 @@ export function formatTipForClient(
   };
 }
 
+export async function getTipsByUser(userId: string): Promise<ITip[]> {
+  await connectDB();
+  return getTipModel().find({ userId: new mongoose.Types.ObjectId(userId) }).sort({ createdAt: -1 }).limit(20);
+}
+
 export async function getTipsForBuilding(buildingId: string, since?: Date): Promise<ITip[]> {
   await connectDB();
   const query: Record<string, unknown> = { buildingId, status: { $nin: ['resolved', 'flagged'] } };

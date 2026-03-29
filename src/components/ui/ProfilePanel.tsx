@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import type { User } from '@/types';
 
 interface ProfilePanelProps {
@@ -11,6 +12,7 @@ interface ProfilePanelProps {
 
 const FONT = 'var(--font-sans, sans-serif)';
 const UNIT_KEY = 'vigil_unit';
+const NOTIF_KEY = 'vigil_notifications';
 
 function useUnit() {
   const [unit, setUnit] = useState<'mi' | 'km'>('mi');
@@ -27,6 +29,15 @@ function useUnit() {
 }
 
 // ─── Icons ────────────────────────────────────────────────────────────────────
+
+function IconUser() {
+  return (
+    <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.45)" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="8" r="4" />
+      <path d="M4 20c0-4 3.6-7 8-7s8 3 8 7" />
+    </svg>
+  );
+}
 
 function IconBell() {
   return (
@@ -123,6 +134,17 @@ function Row({
 export default function ProfilePanel({ user, onClose, onSignOut }: ProfilePanelProps) {
   const { unit, toggle } = useUnit();
   const [closing, setClosing] = useState(false);
+  const router = useRouter();
+  const [notificationsEnabled, setNotificationsEnabled] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    return localStorage.getItem(NOTIF_KEY) === 'true';
+  });
+
+  const toggleNotifications = () => {
+    const next = !notificationsEnabled;
+    setNotificationsEnabled(next);
+    localStorage.setItem(NOTIF_KEY, String(next));
+  };
 
   const close = () => {
     setClosing(true);
@@ -188,7 +210,42 @@ export default function ProfilePanel({ user, onClose, onSignOut }: ProfilePanelP
 
         {/* Section 2 — Settings */}
         <div style={{ padding: 8 }}>
-          <Row icon={<IconBell />} label="Notifications" />
+          <Row
+            icon={<IconUser />}
+            label="My Account"
+            onClick={() => { close(); setTimeout(() => router.push('/account'), 140); }}
+          />
+          <Row
+            icon={<IconBell />}
+            label="Notifications"
+            onClick={toggleNotifications}
+            right={
+              <div
+                style={{
+                  width: 32,
+                  height: 18,
+                  borderRadius: 100,
+                  background: notificationsEnabled ? '#3B82F6' : 'rgba(255,255,255,0.12)',
+                  transition: 'background 200ms ease',
+                  cursor: 'pointer',
+                  position: 'relative',
+                  flexShrink: 0,
+                }}
+              >
+                <div style={{
+                  width: 12,
+                  height: 12,
+                  borderRadius: '50%',
+                  background: '#ffffff',
+                  position: 'absolute',
+                  top: 3,
+                  left: notificationsEnabled ? 17 : 3,
+                  transition: 'left 200ms ease',
+                  boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
+                }} />
+              </div>
+            }
+          />
           <Row
             icon={<IconMapPin />}
             label="Preferred units"

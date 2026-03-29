@@ -89,7 +89,7 @@ export default function NotificationFeed({ lng, lat, radius, user }: Notificatio
   return (
     <div style={{ width: '320px', height: '100%', display: 'flex', flexDirection: 'column', background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(20px)', borderLeft: '1px solid rgba(255,255,255,0.08)', fontFamily: 'var(--font-sans, sans-serif)' }}>
       <div style={{ padding: '16px 16px 0', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
-        <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.4)', letterSpacing: '0.25em', marginBottom: '12px' }}>LIVE FEED</div>
+        <div style={{ fontFamily: 'var(--font-serif, Georgia, serif)', fontWeight: 400, fontSize: '15px', color: 'rgba(255,255,255,0.7)', marginBottom: '12px', letterSpacing: '-0.01em' }}>Live Feed</div>
         <div style={{ display: 'flex', gap: '4px', paddingBottom: '12px', overflowX: 'auto' }}>
           {FILTER_TABS.map(tab => (
             <button key={tab.value} onClick={() => setFilter(tab.value)} style={{ padding: '3px 8px', borderRadius: '999px', fontSize: '9px', letterSpacing: '0.1em', cursor: 'pointer', whiteSpace: 'nowrap', background: filter === tab.value ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.04)', border: `1px solid ${filter === tab.value ? 'rgba(255,255,255,0.3)' : 'rgba(255,255,255,0.08)'}`, color: filter === tab.value ? 'rgba(255,255,255,0.8)' : 'rgba(255,255,255,0.3)' }}>{tab.label}</button>

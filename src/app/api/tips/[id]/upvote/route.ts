@@ -14,7 +14,7 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
     const result = await upvoteTip(id, userId);
     if (!result.ok) {
       if (result.reason === 'own_tip') {
-        return NextResponse.json({ error: 'You can’t upvote your own flare' }, { status: 400 });
+        return NextResponse.json({ error: "You can't upvote your own flare" }, { status: 400 });
       }
       return NextResponse.json({ error: 'Flare not found' }, { status: 404 });
     }

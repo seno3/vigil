@@ -40,6 +40,11 @@ export async function findById(id: string): Promise<IUser | null> {
   return getUserModel().findById(id);
 }
 
+export async function incrementTipsSubmitted(userId: string): Promise<void> {
+  await connectDB();
+  await getUserModel().findByIdAndUpdate(userId, { $inc: { tipsSubmitted: 1 } });
+}
+
 export async function updateCredibility(userId: string, delta: number): Promise<void> {
   await connectDB();
   const user = await getUserModel().findById(userId);

@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getAuthUser } from '@/lib/auth';
 import { createTip, formatTipForClient, getTipsInArea } from '@/lib/db/tips';
-import { findById } from '@/lib/db/users';
+import { findById, incrementTipsSubmitted } from '@/lib/db/users';
 import { processTip } from '@/lib/agents/orchestrator';
 
 export async function GET(req: Request) {
@@ -38,7 +38,8 @@ export async function POST(req: Request) {
     expiresAt,
   });
 
-  // Process async — don't block the response
+  // Increment user's tip counter and process async — don't block the response
+  incrementTipsSubmitted(userId).catch(console.error);
   processTip(tip).catch(console.error);
 
   return NextResponse.json(formatTipForClient(tip, userId), { status: 201 });
