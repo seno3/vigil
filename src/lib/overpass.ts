@@ -21,18 +21,36 @@ interface OverpassResponse {
 }
 
 const OVERPASS_ENDPOINT = 'https://overpass-api.de/api/interpreter';
-const TIMEOUT = 20000;
+const TIMEOUT = 30000;
 
 async function queryOverpass(query: string): Promise<OverpassResponse> {
-  const res = await fetch(OVERPASS_ENDPOINT, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: `data=${encodeURIComponent(query)}`,
-    signal: AbortSignal.timeout(TIMEOUT),
-  });
+  const maxRetries = 3;
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      const res = await fetch(OVERPASS_ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: `data=${encodeURIComponent(query)}`,
+        signal: AbortSignal.timeout(TIMEOUT),
+      });
 
-  if (!res.ok) throw new Error(`Overpass API error: ${res.status}`);
-  return res.json();
+      if (res.status === 429) {
+        // Rate limited, wait with exponential backoff
+        const delay = Math.pow(2, attempt) * 1000;
+        console.warn(`Overpass API rate limited, retrying in ${delay}ms...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        continue;
+      }
+
+      if (!res.ok) throw new Error(`Overpass API error: ${res.status}`);
+      return res.json();
+    } catch (err) {
+      if (attempt === maxRetries - 1) throw err;
+      console.warn(`Overpass query failed (attempt ${attempt + 1}), retrying...`, err);
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+  }
+  throw new Error('Max retries exceeded');
 }
 
 function inferBuildingType(tags: Record<string, string> = {}): string {
@@ -88,7 +106,7 @@ export async function fetchBuildings(
   radius: number
 ): Promise<Building[]> {
   const query = `
-[out:json][timeout:25];
+[out:json][timeout:30];
 (
   way["building"](around:${radius},${lat},${lng});
 );
@@ -151,7 +169,7 @@ export async function fetchRoads(
   radius: number
 ): Promise<Road[]> {
   const query = `
-[out:json][timeout:25];
+[out:json][timeout:30];
 (
   way["highway"~"primary|secondary|tertiary|residential|unclassified"](around:${radius},${lat},${lng});
 );
@@ -178,14 +196,17 @@ out body geom;
   return roads;
 }
 
-export async function fetchInfrastructure(
+export async function fetchTownData(
   lat: number,
   lng: number,
   radius: number
-): Promise<Infrastructure[]> {
+): Promise<{ buildings: Building[]; roads: Road[]; infrastructure: Infrastructure[] }> {
   const query = `
-[out:json][timeout:25];
+[out:json][timeout:30];
 (
+  way["building"](around:${radius},${lat},${lng});
+  node["building"](around:${radius},${lat},${lng});
+  way["highway"~"primary|secondary|tertiary|residential|unclassified"](around:${radius},${lat},${lng});
   node["amenity"~"hospital|school|fire_station|shelter|community_centre"](around:${radius},${lat},${lng});
   way["amenity"~"hospital|school|fire_station|shelter|community_centre"](around:${radius},${lat},${lng});
 );
@@ -193,30 +214,104 @@ out body geom;
   `.trim();
 
   const data = await queryOverpass(query);
-  const infra: Infrastructure[] = [];
+  const buildings: Building[] = [];
+  const roads: Road[] = [];
+  const infrastructure: Infrastructure[] = [];
 
   for (const el of data.elements) {
-    const tags = (el as OverpassNode | OverpassWay).tags ?? {};
-    const amenity = tags['amenity'] ?? '';
-
-    let position: { lat: number; lng: number };
-    if (el.type === 'node') {
-      position = { lat: (el as OverpassNode).lat, lng: (el as OverpassNode).lon };
-    } else {
+    if (el.type === 'way') {
       const way = el as OverpassWay;
-      if (!way.geometry || way.geometry.length === 0) continue;
-      const poly: [number, number][] = way.geometry.map((p) => [p.lat, p.lon]);
-      position = computeCentroid(poly);
-    }
+      const tags = way.tags ?? {};
 
-    infra.push({
-      id: `i${el.id}`,
-      type: amenity,
-      name: tags['name'] ?? amenity,
-      position,
-      capacity: tags['capacity'] ? parseInt(tags['capacity'], 10) : undefined,
-    });
+      if (tags['building']) {
+        // Building
+        if (!way.geometry || way.geometry.length < 3) continue;
+        let polygon: [number, number][] = way.geometry.map((pt) => [pt.lat, pt.lon]);
+
+        // Ensure polygon is closed
+        if (polygon.length > 2 && (polygon[0][0] !== polygon[polygon.length - 1][0] || polygon[0][1] !== polygon[polygon.length - 1][1])) {
+          polygon.push(polygon[0]);
+        }
+
+        const type = inferBuildingType(tags);
+        const material = inferMaterial(tags, type);
+        const levels = parseInt(tags['building:levels'] ?? (type === 'commercial' ? '2' : '1'), 10) || 1;
+        const area = polygonArea(polygon);
+        const centroid = computeCentroid(polygon);
+
+        buildings.push({
+          id: `b${way.id}`,
+          centroid,
+          polygon,
+          type,
+          levels,
+          material,
+          area_sqm: Math.round(area),
+        });
+      } else if (tags['highway']) {
+        // Road
+        if (!way.geometry || way.geometry.length < 2) continue;
+        roads.push({
+          id: `r${way.id}`,
+          name: tags['name'] ?? tags['ref'] ?? 'Unnamed Road',
+          geometry: way.geometry.map((pt) => [pt.lat, pt.lon] as [number, number]),
+          type: tags['highway'] ?? 'residential',
+        });
+      } else if (tags['amenity']) {
+        // Infrastructure (way)
+        if (!way.geometry || way.geometry.length === 0) continue;
+        const poly: [number, number][] = way.geometry.map((p) => [p.lat, p.lon]);
+        const position = computeCentroid(poly);
+        infrastructure.push({
+          id: `i${el.id}`,
+          type: tags['amenity'],
+          name: tags['name'] ?? tags['amenity'],
+          position,
+          capacity: tags['capacity'] ? parseInt(tags['capacity'], 10) : undefined,
+        });
+      }
+    } else if (el.type === 'node') {
+      const node = el as OverpassNode;
+      const tags = node.tags ?? {};
+      if (tags['building']) {
+        // Building (node)
+        const lat = node.lat;
+        const lon = node.lon;
+        const size = 0.0001; // approx 10m square
+        const polygon: [number, number][] = [
+          [lat - size/2, lon - size/2],
+          [lat - size/2, lon + size/2],
+          [lat + size/2, lon + size/2],
+          [lat + size/2, lon - size/2],
+          [lat - size/2, lon - size/2], // close
+        ];
+        const area = polygonArea(polygon);
+        const centroid = computeCentroid(polygon);
+        const type = inferBuildingType(tags);
+        const material = inferMaterial(tags, type);
+        const levels = parseInt(tags['building:levels'] ?? '1', 10) || 1;
+
+        buildings.push({
+          id: `b${node.id}`,
+          centroid,
+          polygon,
+          type,
+          levels,
+          material,
+          area_sqm: Math.round(area),
+        });
+      } else if (tags['amenity']) {
+        // Infrastructure (node)
+        infrastructure.push({
+          id: `i${el.id}`,
+          type: tags['amenity'],
+          name: tags['name'] ?? tags['amenity'],
+          position: { lat: node.lat, lng: node.lon },
+          capacity: tags['capacity'] ? parseInt(tags['capacity'], 10) : undefined,
+        });
+      }
+    }
   }
 
-  return infra;
+  return { buildings, roads, infrastructure };
 }

@@ -16,6 +16,8 @@ async function callAgent(prompt: string, retries = 1): Promise<AgentData> {
     try {
       const result = await model.generateContent(prompt);
       const text = result.response.text();
+      // Add delay to avoid rate limits
+      await new Promise(resolve => setTimeout(resolve, 2000));
       return JSON.parse(text) as AgentData;
     } catch (err) {
       if (attempt === retries) throw err;

@@ -9,7 +9,7 @@ import {
   useCallback,
 } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
-import { OrbitControls, Grid, Stars } from '@react-three/drei';
+import { OrbitControls, Environment } from '@react-three/drei';
 import * as THREE from 'three';
 import {
   TownModel,
@@ -25,6 +25,8 @@ import TornadoVis from './TornadoVis';
 import EvacRoutes from './EvacRoutes';
 import Labels3D from './Labels3D';
 import TimeSlider from './TimeSlider';
+import { TerrainGround, Atmosphere } from './TerrainSky';
+import RoadNetwork from './RoadNetwork';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const PLAYBACK_DURATION = 20; // seconds to traverse full path
@@ -268,48 +270,12 @@ function SceneContent({
 
   return (
     <>
-      {/* Atmosphere */}
-      <fog attach="fog" args={['#0a0e17', 800, 3000]} />
-      <color attach="background" args={['#0a0e17']} />
-
-      {/* Lighting — stormy overcast */}
-      <ambientLight intensity={0.25} color="#334466" />
-      {/* Primary overcast fill */}
-      <directionalLight
-        position={[200, 600, 200]}
-        intensity={0.8}
-        color="#aabbcc"
-        castShadow
-        shadow-mapSize={[2048, 2048]}
-      />
-      {/* Warm backlight */}
-      <directionalLight position={[-300, 200, -300]} intensity={0.3} color="#ff6b2b" />
-      {/* Pre-tornado sky — sickly yellow-green from directly above */}
-      <directionalLight position={[0, 800, 0]} intensity={0.45} color="#b8d444" />
-
-      {/* Stars overhead for atmosphere */}
-      <Stars radius={2000} depth={50} count={1000} factor={2} saturation={0} fade speed={0.5} />
-
-      {/* Ground grid */}
-      <Grid
-        args={[2000, 2000]}
-        cellSize={50}
-        cellThickness={0.3}
-        cellColor="#1e2a3a"
-        sectionSize={200}
-        sectionThickness={0.8}
-        sectionColor="#2a3a50"
-        fadeDistance={2000}
-        fadeStrength={1}
-        followCamera={false}
-        infiniteGrid
-      />
-
-      {/* Ground plane */}
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.5, 0]} receiveShadow>
-        <planeGeometry args={[3000, 3000]} />
-        <meshStandardMaterial color="#0d1420" roughness={1} />
-      </mesh>
+      <Atmosphere />
+      <Environment preset="city" environmentIntensity={0.42} />
+      <TerrainGround size={3600} segments={112} />
+      {townModel.roads.length > 0 && (
+        <RoadNetwork roads={townModel.roads} centerLat={centerLat} centerLng={centerLng} />
+      )}
 
       {/* Buildings with progressive damage reveal */}
       <Buildings
@@ -345,8 +311,10 @@ function SceneContent({
         />
       )}
 
-      {/* Evacuation routes */}
-      {(evacuationRoutes.length > 0 || blockedRoads.length > 0) && (
+      {/* Evacuation overlays + critical infrastructure markers */}
+      {(evacuationRoutes.length > 0 ||
+        blockedRoads.length > 0 ||
+        townModel.infrastructure.length > 0) && (
         <EvacRoutes
           roads={townModel.roads}
           evacuationRoutes={evacuationRoutes}
@@ -390,7 +358,7 @@ export default function Scene3D({ townModel, agentOutputs }: Scene3DProps) {
       <Canvas
         shadows
         camera={{
-          position: [0, 800, 600],
+          position: [0, 400, 400],
           fov: 45,
           near: 1,
           far: 8000,
@@ -398,7 +366,7 @@ export default function Scene3D({ townModel, agentOutputs }: Scene3DProps) {
         gl={{
           antialias: true,
           toneMapping: THREE.ACESFilmicToneMapping,
-          toneMappingExposure: 0.8,
+          toneMappingExposure: 0.92,
         }}
         style={{ height: pathSegments.length > 0 ? 'calc(100% - 72px)' : '100%' }}
       >

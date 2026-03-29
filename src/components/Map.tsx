@@ -20,6 +20,7 @@ declare global {
 export default function Map({ townModel, onAddressSelect, loading }: MapProps) {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
+  const mapboxglRef = useRef<any>(null);
   const [searchValue, setSearchValue] = useState('');
   const [suggestions, setSuggestions] = useState<Array<{ place_name: string; center: [number, number] }>>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -32,19 +33,41 @@ export default function Map({ townModel, onAddressSelect, loading }: MapProps) {
     const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN ?? '';
 
     import('mapbox-gl').then((mapboxgl) => {
+      mapboxglRef.current = mapboxgl.default;
       mapboxgl.default.accessToken = token;
 
       const map = new mapboxgl.default.Map({
         container: mapContainerRef.current!,
         style: 'mapbox://styles/mapbox/dark-v11',
-        center: [-97.4868, 35.3395],
-        zoom: 13,
+        center: [-98.5795, 39.8283], // Center of the US
+        zoom: 3.5, // Zoomed out to show whole US
         antialias: true,
       });
 
       map.on('load', () => {
         setMapLoaded(true);
         mapRef.current = map;
+
+        // Add click handler for pinpoint selection
+        map.on('click', async (e) => {
+          const { lng, lat } = e.lngLat;
+          const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN ?? '';
+          if (!token || token === 'pk.your_mapbox_token_here') return;
+
+          try {
+            const res = await fetch(
+              `https://api.mapbox.com/geocoding/v5/mapbox.places/${lng},${lat}.json?access_token=${token}`
+            );
+            const json = await res.json();
+            if (json.features && json.features.length > 0) {
+              const address = json.features[0].place_name;
+              setSearchValue(address);
+              onAddressSelect(address);
+            }
+          } catch (err) {
+            console.error('Reverse geocoding failed:', err);
+          }
+        });
       });
 
       return () => map.remove();
@@ -110,6 +133,18 @@ export default function Map({ townModel, onAddressSelect, loading }: MapProps) {
       zoom: 14,
       duration: 1000,
     });
+
+    // Fit bounds to show all buildings
+    if (features.length > 0 && mapboxglRef.current) {
+      const bounds = new mapboxglRef.current.LngLatBounds();
+      features.forEach((f) => {
+        f.geometry.coordinates[0].forEach((coord) => {
+          const [lng, lat] = coord as [number, number];
+          bounds.extend([lng, lat]);
+        });
+      });
+      map.fitBounds(bounds, { padding: 50, maxZoom: 16, duration: 1000 });
+    }
   }, [townModel, mapLoaded]);
 
   const searchAddress = async (query: string) => {
