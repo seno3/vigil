@@ -15,7 +15,7 @@ interface MapProps {
   center?: [number, number];
   locateTrigger?: number;
   showExits?: boolean;
-  flyTarget?: { center: [number, number]; zoom: number } | null;
+  flyTarget?: { center: [number, number]; zoom: number; duration?: number } | null;
   placementMode?: boolean;
   onReady?: () => void;
   onMapClick?: (lng: number, lat: number) => void;
@@ -23,6 +23,7 @@ interface MapProps {
   onRoadClick?: (lng: number, lat: number, roadId: string) => void;
   onPlacementClick?: (lng: number, lat: number) => void;
   onMapRef?: (map: any, mapboxGL: any) => void;
+  onMoveEnd?: (lng: number, lat: number) => void;
 }
 
 declare global {
@@ -120,6 +121,7 @@ export default function Map({
   onRoadClick,
   onPlacementClick,
   onMapRef,
+  onMoveEnd,
 }: MapProps) {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
@@ -153,12 +155,14 @@ export default function Map({
   const placementModeRef = useRef(placementMode);
   const threatBuildingsRef = useRef(threatBuildings);
   const onMapRefRef = useRef(onMapRef);
+  const onMoveEndRef = useRef(onMoveEnd);
   useEffect(() => { onMapClickRef.current = onMapClick; }, [onMapClick]);
   useEffect(() => { onBuildingClickRef.current = onBuildingClick; }, [onBuildingClick]);
   useEffect(() => { onRoadClickRef.current = onRoadClick; }, [onRoadClick]);
   useEffect(() => { onPlacementClickRef.current = onPlacementClick; }, [onPlacementClick]);
   useEffect(() => { onReadyRef.current = onReady; }, [onReady]);
   useEffect(() => { onMapRefRef.current = onMapRef; }, [onMapRef]);
+  useEffect(() => { onMoveEndRef.current = onMoveEnd; }, [onMoveEnd]);
   useEffect(() => { placementModeRef.current = placementMode; }, [placementMode]);
   useEffect(() => { threatBuildingsRef.current = threatBuildings; }, [threatBuildings]);
 
@@ -243,6 +247,10 @@ export default function Map({
       }
 
       map.on('moveend', syncCenter);
+      map.on('moveend', () => {
+        const c = map.getCenter();
+        onMoveEndRef.current?.(c.lng, c.lat);
+      });
 
       // Inject pulse keyframe once
       if (!document.getElementById('user-loc-style')) {
@@ -528,7 +536,7 @@ export default function Map({
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapLoaded || !flyTarget) return;
-    map.flyTo({ center: flyTarget.center, zoom: flyTarget.zoom, duration: 500 });
+    map.flyTo({ center: flyTarget.center, zoom: flyTarget.zoom, duration: flyTarget.duration ?? 500 });
   }, [flyTarget, mapLoaded]);
 
   const prevThreatBuildingIds = useRef<Set<string>>(new Set());

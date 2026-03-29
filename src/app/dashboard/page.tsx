@@ -3,7 +3,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { useSearchParams } from 'next/navigation';
 import dynamic from 'next/dynamic';
-import type { User, Tip, TipCategory, TipUrgency, ThreatState, Emergency, Exit, ExitType } from '@/types';
+import type { User, Tip, TipCategory, TipUrgency, ThreatState, Emergency, Exit, ExitType, WeatherData, NewsArticle } from '@/types';
 import TopBar from '@/components/TopBar';
 import MapLocationSearch from '@/components/MapLocationSearch';
 import NotificationFeed from '@/components/NotificationFeed';
@@ -16,9 +16,16 @@ import ExitModal from '@/components/ExitModal';
 import EmergencyOverlay from '@/components/emergency/EmergencyOverlay';
 import EmergencyMarker from '@/components/emergency/EmergencyMarker';
 import SettingsModal from '@/components/settings/SettingsModal';
+import WeatherWidget from '@/components/WeatherWidget';
 import { useFlareRadiusM } from '@/hooks/useFlareRadiusM';
 import { useUserLocation } from '@/hooks/useUserLocation';
 import { dispatchFlaresChanged, VIGIL_FLARES_CHANGED_EVENT } from '@/lib/flareSync';
+
+function readBoolPref(key: string, def: boolean): boolean {
+  if (typeof window === 'undefined') return def;
+  const v = localStorage.getItem(key);
+  return v === null ? def : v !== 'false';
+}
 
 const MapView = dynamic(() => import('@/components/Map'), { ssr: false });
 
@@ -108,6 +115,13 @@ export default function DashboardPage() {
   const flareRadiusM = useFlareRadiusM();
   const userLoc = useUserLocation();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [showWeather, setShowWeather] = useState(() => readBoolPref('vigil_show_weather', true));
+  const [showNews, setShowNews] = useState(() => readBoolPref('vigil_show_news', true));
+  const [showDevWidget, setShowDevWidget] = useState(() => readBoolPref('vigil_show_dev_widget', true));
+  const [weather, setWeather] = useState<WeatherData | null>(null);
+  const [news, setNews] = useState<NewsArticle[]>([]);
+  const [mapCenter, setMapCenter] = useState<[number, number]>([-87.6298, 41.8781]);
+  const moveEndTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [center, setCenter] = useState<[number, number]>(() => {
     const lat = parseFloat(searchParams.get('lat') ?? '');
     const lng = parseFloat(searchParams.get('lng') ?? '');
@@ -134,7 +148,7 @@ export default function DashboardPage() {
   const [exitModal, setExitModal] = useState<{ buildingId: string; buildingCenter: { lng: number; lat: number } } | null>(null);
   const [exitPlacementMode, setExitPlacementMode] = useState(false);
   const [exitPlacedLocation, setExitPlacedLocation] = useState<{ lng: number; lat: number } | null>(null);
-  const [flyTarget, setFlyTarget] = useState<{ center: [number, number]; zoom: number } | null>(null);
+  const [flyTarget, setFlyTarget] = useState<{ center: [number, number]; zoom: number; duration?: number } | null>(null);
   const [showAuth, setShowAuth] = useState(false);
   const [alertMsg, setAlertMsg] = useState<string | null>(null);
   const [revealed, setRevealed] = useState(false);
@@ -220,6 +234,40 @@ export default function DashboardPage() {
       /* silent */
     }
   }, [feedLng, feedLat, flareRadiusM]);
+
+  // Fetch weather + news for current map center
+  const fetchAmbientData = useCallback(async (lng: number, lat: number) => {
+    const [weatherRes, newsRes] = await Promise.allSettled([
+      fetch(`/api/weather?lat=${lat}&lng=${lng}`).then((r) => r.json()),
+      fetch(`/api/news?lat=${lat}&lng=${lng}`).then((r) => r.json()),
+    ]);
+    if (weatherRes.status === 'fulfilled' && weatherRes.value && !weatherRes.value.error) {
+      setWeather(weatherRes.value as WeatherData);
+    }
+    if (newsRes.status === 'fulfilled' && Array.isArray(newsRes.value)) {
+      setNews(newsRes.value as NewsArticle[]);
+    }
+  }, []);
+
+  // Initial ambient data fetch
+  useEffect(() => {
+    fetchAmbientData(mapCenter[0], mapCenter[1]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Refresh weather every 10 min
+  useEffect(() => {
+    const id = setInterval(() => fetchAmbientData(mapCenter[0], mapCenter[1]), 10 * 60 * 1000);
+    return () => clearInterval(id);
+  }, [fetchAmbientData, mapCenter]);
+
+  const handleMapMoveEnd = useCallback((lng: number, lat: number) => {
+    if (moveEndTimer.current) clearTimeout(moveEndTimer.current);
+    moveEndTimer.current = setTimeout(() => {
+      setMapCenter([lng, lat]);
+      fetchAmbientData(lng, lat);
+    }, 2000);
+  }, [fetchAmbientData]);
 
   const handleMapClick = useCallback((lng: number, lat: number) => {
     if (!user) { setShowAuth(true); return; }
@@ -383,7 +431,13 @@ export default function DashboardPage() {
             onRoadClick={handleRoadClick}
             onPlacementClick={handlePlacementClick}
             onMapRef={(map, mapboxGL) => setMapContext(map ? { map, mapboxGL } : null)}
+            onMoveEnd={handleMapMoveEnd}
           />
+
+          {/* Weather widget — top-left below TopBar */}
+          {!emergencyVisible && showWeather && weather && (
+            <WeatherWidget weather={weather} />
+          )}
 
           {/* Report button — fades during emergency */}
           <button
@@ -448,11 +502,23 @@ export default function DashboardPage() {
             onAuthOpen={() => setShowAuth(true)}
             onSignOut={handleSignOut}
             onOpenSettings={() => setSettingsOpen(true)}
+            news={news}
+            showNews={showNews}
           />
         )}
       </div>
 
-      {!emergencyVisible && settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
+      {!emergencyVisible && settingsOpen && (
+        <SettingsModal
+          onClose={() => setSettingsOpen(false)}
+          showWeather={showWeather}
+          onToggleWeather={() => setShowWeather((v) => { const n = !v; localStorage.setItem('vigil_show_weather', n ? 'true' : 'false'); return n; })}
+          showNews={showNews}
+          onToggleNews={() => setShowNews((v) => { const n = !v; localStorage.setItem('vigil_show_news', n ? 'true' : 'false'); return n; })}
+          showDevWidget={showDevWidget}
+          onToggleDevWidget={() => setShowDevWidget((v) => { const n = !v; localStorage.setItem('vigil_show_dev_widget', n ? 'true' : 'false'); return n; })}
+        />
+      )}
 
       {!emergencyVisible && tipModal && <TipModal {...tipModal} onClose={() => setTipModal(null)} onSubmit={handleTipSubmit} />}
       {!emergencyVisible && showAuth && <AuthModal onClose={() => setShowAuth(false)} onAuth={u => setUser(u as User)} />}
@@ -474,7 +540,7 @@ export default function DashboardPage() {
       )}
 
       {/* ── DEV-ONLY emergency test widget ── */}
-      {process.env.NODE_ENV === 'development' && (
+      {process.env.NODE_ENV === 'development' && showDevWidget && (
         <DevEmergencyWidget lat={feedLat} lng={feedLng} />
       )}
 

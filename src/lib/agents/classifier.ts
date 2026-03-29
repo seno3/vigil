@@ -9,16 +9,31 @@ export interface ClassifierResult {
   reasoning: string;
 }
 
+interface NewsContext {
+  title: string;
+  source: string;
+  publishedAt: string;
+  category?: string;
+}
+
 export async function classifyTip(
   description: string,
   category: string,
   location: [number, number],
+  recentNews?: NewsContext[],
 ): Promise<ClassifierResult> {
+  const newsBlock =
+    recentNews && recentNews.length > 0
+      ? `\n\nRECENT LOCAL NEWS (for context):\n${recentNews
+          .map((a, i) => `${i + 1}. [${a.category?.toUpperCase() ?? 'NEWS'}] "${a.title}" — ${a.source} (${a.publishedAt})`)
+          .join('\n')}\n\nIf the tip aligns with a news story, this INCREASES credibility significantly — the user is corroborating media-confirmed events. Mention this in reasoning.`
+      : '';
+
   const prompt = `You are a community safety AI classifying a public safety tip.
 
 TIP: "${description}"
 CATEGORY: ${category}
-LOCATION: [${location[1].toFixed(4)}, ${location[0].toFixed(4)}]
+LOCATION: [${location[1].toFixed(4)}, ${location[0].toFixed(4)}]${newsBlock}
 
 Classify this tip and return JSON:
 {

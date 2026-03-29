@@ -15,6 +15,24 @@ function IconMapPin() {
   );
 }
 
+function Toggle({ on }: { on: boolean }) {
+  return (
+    <div style={{
+      width: 30, height: 17, borderRadius: 999,
+      background: on ? 'rgba(59,130,246,0.6)' : 'rgba(255,255,255,0.12)',
+      border: `1px solid ${on ? 'rgba(59,130,246,0.8)' : 'rgba(255,255,255,0.2)'}`,
+      position: 'relative', transition: 'background 150ms',
+    }}>
+      <div style={{
+        position: 'absolute', top: 2, left: on ? 14 : 2,
+        width: 11, height: 11, borderRadius: '50%',
+        background: on ? '#fff' : 'rgba(255,255,255,0.4)',
+        transition: 'left 150ms',
+      }} />
+    </div>
+  );
+}
+
 function SettingsRow({
   icon,
   label,
@@ -53,7 +71,17 @@ function SettingsRow({
   );
 }
 
-export default function SettingsModal({ onClose }: { onClose: () => void }) {
+interface SettingsModalProps {
+  onClose: () => void;
+  showWeather?: boolean;
+  onToggleWeather?: () => void;
+  showNews?: boolean;
+  onToggleNews?: () => void;
+  showDevWidget?: boolean;
+  onToggleDevWidget?: () => void;
+}
+
+export default function SettingsModal({ onClose, showWeather = true, onToggleWeather, showNews = true, onToggleNews, showDevWidget = true, onToggleDevWidget }: SettingsModalProps) {
   const { unit, toggle } = usePreferredUnit();
 
   return (
@@ -115,6 +143,30 @@ export default function SettingsModal({ onClose }: { onClose: () => void }) {
             }
           />
           <FlareRadiusSettings />
+          {onToggleWeather && (
+            <SettingsRow
+              icon={<span style={{ fontSize: 14 }}>⛅</span>}
+              label="Weather widget"
+              onClick={onToggleWeather}
+              right={<Toggle on={showWeather} />}
+            />
+          )}
+          {onToggleNews && (
+            <SettingsRow
+              icon={<span style={{ fontSize: 14 }}>📰</span>}
+              label="News feed"
+              onClick={onToggleNews}
+              right={<Toggle on={showNews} />}
+            />
+          )}
+          {process.env.NODE_ENV === 'development' && onToggleDevWidget && (
+            <SettingsRow
+              icon={<span style={{ fontFamily: 'var(--font-mono, monospace)', color: 'rgba(234,179,8,0.7)', fontSize: 11 }}>DEV</span>}
+              label="Emergency test widget"
+              onClick={onToggleDevWidget}
+              right={<Toggle on={showDevWidget} />}
+            />
+          )}
         </div>
       </div>
     </>

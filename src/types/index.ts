@@ -141,6 +141,35 @@ export interface Exit {
   createdAt?: string;
 }
 
+// ─── Ambient data types ───────────────────────────────────────────────────────
+export interface WeatherData {
+  temperature: number;
+  feelsLike: number;
+  humidity: number;
+  windSpeed: number;
+  windDirection: number;
+  weatherCode: number;
+  weatherDescription: string;
+  precipitation: number;
+  alerts: string[];
+  hourlyForecast: Array<{
+    time: string;
+    temperature: number;
+    weatherCode: number;
+    precipitationProbability: number;
+  }>;
+}
+
+export interface NewsArticle {
+  title: string;
+  description: string;
+  url: string;
+  source: string;
+  publishedAt: string;
+  imageUrl?: string;
+  relevanceCategory?: 'emergency' | 'safety' | 'weather' | 'infrastructure' | 'general';
+}
+
 // ─── Emergency domain types ───────────────────────────────────────────────────
 export type EmergencyType = 'shooting' | 'tornado' | 'earthquake' | 'fire';
 

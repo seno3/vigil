@@ -1,6 +1,6 @@
 'use client';
 import { useState, useEffect, useCallback } from 'react';
-import type { Tip, TipCategory, User } from '@/types';
+import type { Tip, TipCategory, User, NewsArticle } from '@/types';
 import { formatFlareRadiusShort } from '@/lib/flareRadius';
 import { VIGIL_FLARES_CHANGED_EVENT } from '@/lib/flareSync';
 import { usePreferredUnit } from '@/hooks/usePreferredUnit';
@@ -20,6 +20,8 @@ interface NotificationFeedProps {
   onAuthOpen: () => void;
   onSignOut: () => void;
   onOpenSettings: () => void;
+  news?: NewsArticle[];
+  showNews?: boolean;
 }
 
 const FONT = 'var(--font-sans, sans-serif)';
@@ -43,16 +45,31 @@ const SEVERITY_COLORS: Record<string, string> = {
   general_safety: '#22c55e',
 };
 
-const FILTER_TABS: Array<{ label: string; value: TipCategory | 'all' }> = [
+type FeedFilter = TipCategory | 'all' | 'news';
+
+const FILTER_TABS_BASE: Array<{ label: string; value: FeedFilter }> = [
   { label: 'ALL', value: 'all' },
   { label: 'THREATS', value: 'active_threat' },
   { label: 'INFRA', value: 'infrastructure' },
   { label: 'WEATHER', value: 'weather' },
   { label: 'SAFETY', value: 'general_safety' },
+  { label: 'NEWS', value: 'news' },
 ];
 
-const FILTER_ROW1 = FILTER_TABS.slice(0, 3);
-const FILTER_ROW2 = FILTER_TABS.slice(3);
+const NEWS_CATEGORY_COLORS: Record<string, string> = {
+  emergency: '#ef4444',
+  safety: '#f97316',
+  weather: '#f59e0b',
+  infrastructure: '#3b82f6',
+};
+
+function newsTimeAgo(dateStr: string): string {
+  const s = Math.floor((Date.now() - new Date(dateStr).getTime()) / 1000);
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+}
 
 function timeAgo(date: string) {
   const s = Math.floor((Date.now() - new Date(date).getTime()) / 1000);
@@ -91,11 +108,13 @@ export default function NotificationFeed({
   onAuthOpen,
   onSignOut,
   onOpenSettings,
+  news = [],
+  showNews = true,
 }: NotificationFeedProps) {
   const { unit } = usePreferredUnit();
   const userLoc = useUserLocation();
   const [tips, setTips] = useState<Tip[]>([]);
-  const [filter, setFilter] = useState<TipCategory | 'all'>('all');
+  const [filter, setFilter] = useState<FeedFilter>('all');
   const [upvotingId, setUpvotingId] = useState<string | null>(null);
   const [analyzingId, setAnalyzingId] = useState<string | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
@@ -161,9 +180,30 @@ export default function NotificationFeed({
     }
   };
 
-  const filtered = filter === 'all' ? tips : tips.filter(t => t.category === filter);
+  const FILTER_TABS = showNews ? FILTER_TABS_BASE : FILTER_TABS_BASE.filter((t) => t.value !== 'news');
+  // If news tab is hidden but currently selected, reset to 'all'
+  const activeFilter = (!showNews && filter === 'news') ? 'all' : filter;
 
-  const filterButton = (tab: (typeof FILTER_TABS)[number]) => (
+  const filtered = activeFilter === 'all' ? tips : activeFilter === 'news' ? [] : tips.filter((t) => t.category === activeFilter);
+
+  // For 'all' tab: interleave news by time
+  type FeedItem = { type: 'tip'; data: Tip } | { type: 'news'; data: NewsArticle };
+  let feedItems: FeedItem[] = [];
+  if (activeFilter === 'all' && showNews && news.length > 0) {
+    const tipItems: FeedItem[] = tips.map((t) => ({ type: 'tip', data: t }));
+    const newsItems: FeedItem[] = news.map((a) => ({ type: 'news', data: a }));
+    feedItems = [...tipItems, ...newsItems].sort((a, b) => {
+      const ta = a.type === 'tip' ? new Date(a.data.createdAt).getTime() : new Date((a.data as NewsArticle).publishedAt).getTime();
+      const tb = b.type === 'tip' ? new Date(b.data.createdAt).getTime() : new Date((b.data as NewsArticle).publishedAt).getTime();
+      return tb - ta;
+    });
+  } else if (activeFilter === 'news') {
+    feedItems = news.map((a) => ({ type: 'news', data: a }));
+  } else {
+    feedItems = filtered.map((t) => ({ type: 'tip', data: t }));
+  }
+
+  const filterButton = (tab: (typeof FILTER_TABS_BASE)[number]) => (
     <button
       key={tab.value}
       type="button"
@@ -176,9 +216,9 @@ export default function NotificationFeed({
         cursor: 'pointer',
         whiteSpace: 'nowrap',
         flexShrink: 0,
-        background: filter === tab.value ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.05)',
-        border: `1px solid ${filter === tab.value ? 'rgba(255,255,255,0.48)' : 'rgba(255,255,255,0.22)'}`,
-        color: filter === tab.value ? 'rgba(255,255,255,0.88)' : 'rgba(255,255,255,0.38)',
+        background: activeFilter === tab.value ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.05)',
+        border: `1px solid ${activeFilter === tab.value ? 'rgba(255,255,255,0.48)' : 'rgba(255,255,255,0.22)'}`,
+        color: activeFilter === tab.value ? 'rgba(255,255,255,0.88)' : 'rgba(255,255,255,0.38)',
       }}
     >
       {tab.label}
@@ -371,18 +411,90 @@ export default function NotificationFeed({
               justifyItems: 'center',
             }}
           >
-            {FILTER_ROW1.map(filterButton)}
+            {FILTER_TABS.slice(0, 3).map(filterButton)}
           </div>
-          <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 35, flexWrap: 'wrap' }}>
-            {FILTER_ROW2.map(filterButton)}
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: `repeat(${FILTER_TABS.slice(3).length}, 1fr)`,
+              gap: '8px 6px',
+              width: '100%',
+              justifyItems: 'center',
+            }}
+          >
+            {FILTER_TABS.slice(3).map(filterButton)}
           </div>
         </div>
       </div>
       <div style={{ flex: 1, overflowY: 'auto', padding: '8px 12px' }}>
-        {filtered.length === 0 && <div style={{ padding: '24px 12px', textAlign: 'center', fontSize: '11px', color: 'rgba(255,255,255,0.2)', letterSpacing: '0.1em' }}>NO FLARES IN AREA</div>}
-        {filtered.map((tip) => {
+        {feedItems.length === 0 && (
+          <div style={{ padding: '24px 12px', textAlign: 'center', fontSize: '11px', color: 'rgba(255,255,255,0.2)', letterSpacing: '0.1em' }}>
+            {activeFilter === 'news' ? 'NO LOCAL NEWS' : 'NO FLARES IN AREA'}
+          </div>
+        )}
+        {feedItems.map((item, idx) => {
+          if (item.type === 'news') {
+            const article = item.data as NewsArticle;
+            const cat = article.relevanceCategory ?? 'general';
+            const catColor = NEWS_CATEGORY_COLORS[cat];
+            const isUrgent = cat === 'emergency' || cat === 'safety';
+            return (
+              <div
+                key={`news-${article.url}-${idx}`}
+                style={{
+                  marginBottom: 8,
+                  background: 'rgba(255,255,255,0.04)',
+                  border: `1px solid ${isUrgent ? (cat === 'emergency' ? 'rgba(239,68,68,0.25)' : 'rgba(249,115,22,0.25)') : 'rgba(255,255,255,0.08)'}`,
+                  borderLeft: isUrgent ? `2px solid ${catColor}55` : undefined,
+                  borderRadius: 8,
+                  padding: '10px 12px',
+                }}
+              >
+                <div style={{ fontSize: 9, letterSpacing: '0.3em', color: 'rgba(255,255,255,0.25)', textTransform: 'uppercase', marginBottom: 5 }}>
+                  📰 Local News
+                </div>
+                <div
+                  style={{
+                    fontSize: 13,
+                    color: 'rgba(255,255,255,0.70)',
+                    fontWeight: 500,
+                    marginBottom: 6,
+                    overflow: 'hidden',
+                    display: '-webkit-box',
+                    WebkitLineClamp: 2,
+                    WebkitBoxOrient: 'vertical',
+                  }}
+                >
+                  {article.title}
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                    <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.30)', fontFamily: 'var(--font-mono, monospace)', whiteSpace: 'nowrap' }}>
+                      {article.source} · {newsTimeAgo(article.publishedAt)}
+                    </span>
+                    {catColor && cat !== 'general' && (
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 9, color: catColor, letterSpacing: '0.08em', textTransform: 'uppercase', flexShrink: 0 }}>
+                        <span style={{ width: 5, height: 5, borderRadius: '50%', background: catColor, display: 'inline-block' }} />
+                        {cat}
+                      </span>
+                    )}
+                  </div>
+                  <a
+                    href={article.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ fontSize: 12, color: 'rgba(255,255,255,0.20)', textDecoration: 'none', flexShrink: 0 }}
+                    title="Open article"
+                  >
+                    🔗
+                  </a>
+                </div>
+              </div>
+            );
+          }
+
+          const tip = item.data as Tip;
           const color = SEVERITY_COLORS[tip.category] ?? '#888';
-          /** Ring only (2px): gradient is hidden behind an opaque inner fill so it doesn’t tint the card. */
           const ringGradient = `linear-gradient(90deg, ${color} 0%, ${color}cc 12%, ${color}55 38%, ${color}1a 68%, transparent 100%)`;
           return (
             <div

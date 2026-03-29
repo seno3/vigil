@@ -52,6 +52,15 @@ export async function incrementTipsCorroborated(userId: string): Promise<void> {
   await getUserModel().findByIdAndUpdate(userId, { $inc: { tipsCorroborated: 1 } });
 }
 
+/** Returns the singleton system user (auto-created on first call). Used for auto-generated tips. */
+export async function getOrCreateSystemUser(): Promise<IUser> {
+  await connectDB();
+  const User = getUserModel();
+  const existing = await User.findOne({ username: '__vigil_system__' });
+  if (existing) return existing;
+  return User.create({ username: '__vigil_system__', passwordHash: '__system__', credibilityScore: 80 });
+}
+
 export async function updateCredibility(userId: string, delta: number): Promise<void> {
   await connectDB();
   const user = await getUserModel().findById(userId);

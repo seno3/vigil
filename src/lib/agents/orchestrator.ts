@@ -4,6 +4,7 @@ import { synthesizeTips } from './synthesizer';
 import { recommendActions } from './recommender';
 import { setAgentField, setAnalysisMeta, updateTipAnalysis, getTipsInArea } from '@/lib/db/tips';
 import { emitTipAnalysis } from '@/lib/socket';
+import { getLocalNews } from '@/lib/news';
 import type { ITip } from '@/lib/db/tips';
 import type { TipStatus } from '@/types';
 
@@ -18,32 +19,46 @@ export async function processTip(tip: ITip): Promise<void> {
   log(tipId, `▶ starting pipeline — "${tip.description.slice(0, 60)}"`);
 
   try {
-    // ── Step 1: Classify ────────────────────────────────────────────────────
+    // ── Step 1: Classify (+ fetch news in parallel for context) ────────────
     log(tipId, '1/4 classifier → calling Gemini…');
     emitTipAnalysis(tipId, { event: 'agent_start', agent: 'classifier' });
 
-    const classification = await classifyTip(tip.description, tip.category, [lng, lat]);
+    const [classification, newsArticles] = await Promise.all([
+      classifyTip(tip.description, tip.category, [lng, lat]),
+      getLocalNews(lat, lng).catch(() => [] as Awaited<ReturnType<typeof getLocalNews>>),
+    ]);
+
+    // Re-classify with news context if relevant articles were found
+    const relevantNews = newsArticles
+      .filter((a) => a.relevanceCategory !== 'general')
+      .slice(0, 3)
+      .map((a) => ({ title: a.title, source: a.source, publishedAt: a.publishedAt, category: a.relevanceCategory }));
+
+    const finalClassification =
+      relevantNews.length > 0
+        ? await classifyTip(tip.description, tip.category, [lng, lat], relevantNews)
+        : classification;
     const classifierData = {
-      category: classification.classification,
-      threatLevel: classification.threatLevel,
+      category: finalClassification.classification,
+      threatLevel: finalClassification.threatLevel,
       credibility: tip.credibilityScore,
-      sourceType: classification.sourceType ?? [],
-      decayMinutes: classification.urgencyDecayMinutes,
-      reasoning: classification.reasoning,
+      sourceType: finalClassification.sourceType ?? [],
+      decayMinutes: finalClassification.urgencyDecayMinutes,
+      reasoning: finalClassification.reasoning,
       completedAt: new Date().toISOString(),
     };
 
     await setAgentField(tipId, 'classifier', classifierData);
-    log(tipId, `1/4 classifier ✓ threat=${classifierData.threatLevel} source=[${classifierData.sourceType.join(',')}]`);
+    log(tipId, `1/4 classifier ✓ threat=${classifierData.threatLevel} source=[${classifierData.sourceType.join(',')}]${relevantNews.length > 0 ? ` newsCtx=${relevantNews.length}` : ''}`);
     emitTipAnalysis(tipId, { event: 'agent_done', agent: 'classifier', data: classifierData });
 
     const status: TipStatus =
-      classification.threatLevel === 'critical' || classification.threatLevel === 'warning'
+      finalClassification.threatLevel === 'critical' || finalClassification.threatLevel === 'warning'
         ? 'corroborated'
         : 'pending';
     await updateTipAnalysis(
       tipId,
-      { classification: classification.classification, threatLevel: classification.threatLevel, reasoning: classification.reasoning },
+      { classification: finalClassification.classification, threatLevel: finalClassification.threatLevel, reasoning: finalClassification.reasoning },
       status,
     );
 
