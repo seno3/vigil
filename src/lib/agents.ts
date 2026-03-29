@@ -1,9 +1,13 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import { TownModel, AgentOutput, AgentData, PathSegment, DamageLevel } from '@/types';
-
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY ?? '');
+import { TownModel, AgentOutput, AgentData } from '@/types';
+import { publishAgentResult } from './agentState';
 
 async function callAgent(prompt: string, retries = 1): Promise<AgentData> {
+  const apiKey = process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY ?? '';
+  if (!apiKey) {
+    throw new Error('Missing Gemini API key — set GEMINI_API_KEY in .env');
+  }
+  const genAI = new GoogleGenerativeAI(apiKey);
   const model = genAI.getGenerativeModel({
     model: 'gemini-2.5-flash',
     generationConfig: {
@@ -32,6 +36,61 @@ const EF_WIND_SPEEDS: Record<number, { min: number; max: number; width_m: number
   4: { min: 166, max: 200, width_m: 800  },
   5: { min: 201, max: 250, width_m: 1200 },
 };
+
+// ─── Context builders (injected before each prompt) ───────────────────────────
+
+function buildPathContext(pathData: AgentData): string {
+  const segs = pathData.path_segments ?? [];
+  if (segs.length === 0) return '';
+  const entry = segs[0];
+  const exit  = segs[segs.length - 1];
+  const maxWidth = Math.max(...segs.map((s) => s.width_m));
+  const maxWind  = Math.max(...segs.map((s) => s.wind_speed_mph));
+  return `PRIOR AGENT CONTEXT:
+Tornado path computed with ${segs.length} segments. Entry: ${entry.lat.toFixed(5)},${entry.lng.toFixed(5)}, Exit: ${exit.lat.toFixed(5)},${exit.lng.toFixed(5)}. Max width: ${maxWidth}m. Max wind: ${maxWind}mph. Use this exact path to determine building damage.
+
+`;
+}
+
+function buildEvacContext(
+  pathData: AgentData,
+  structuralData: AgentData,
+  townModel: TownModel
+): string {
+  const damageLevels = structuralData.damage_levels ?? {};
+  const destroyed = Object.entries(damageLevels).filter(([, v]) => v === 'destroyed');
+  const major     = Object.entries(damageLevels).filter(([, v]) => v === 'major');
+  const destroyedPositions = destroyed
+    .map(([id]) => townModel.buildings.find((b) => b.id === id))
+    .filter(Boolean)
+    .slice(0, 10)
+    .map((b) => `${b!.centroid.lat.toFixed(5)},${b!.centroid.lng.toFixed(5)}`);
+  return `PRIOR AGENT CONTEXT:
+Structural assessment complete: ${destroyed.length} destroyed, ${major.length} major damage. Destroyed buildings at positions: ${destroyedPositions.join('; ')}. These positions indicate blocked road segments.
+
+`;
+}
+
+function buildResponseContext(
+  pathData: AgentData,
+  structuralData: AgentData,
+  evacuationData: AgentData,
+  townModel: TownModel
+): string {
+  const segs       = pathData.path_segments ?? [];
+  const maxWidth   = segs.length ? Math.max(...segs.map((s) => s.width_m)) : 0;
+  const casualties = evacuationData.estimated_casualties ?? structuralData.estimated_casualties ?? 0;
+  const criticalInfra = townModel.infrastructure
+    .filter((i) => i.type === 'hospital' || i.type === 'school')
+    .map((i) => i.name)
+    .join(', ');
+  return `PRIOR AGENT CONTEXT:
+Complete impact picture available. Path: ${segs.length} segments, max width ${maxWidth}m. Casualties: ${casualties}. Critical infrastructure affected: ${criticalInfra}. Deploy resources to maximize coverage.
+
+`;
+}
+
+// ─── Prompt builders (content unchanged from original) ───────────────────────
 
 function buildPathPrompt(townModel: TownModel, efScale: number, windDirection: string): string {
   const ef = EF_WIND_SPEEDS[efScale];
@@ -280,35 +339,64 @@ RETURN EXACTLY this JSON schema:
 }`;
 }
 
-export async function runAgents(
-  townModel: TownModel,
-  efScale: number,
-  windDirection: string,
-  onUpdate: (output: AgentOutput) => void
-): Promise<void> {
-  const now = () => Date.now();
+// ─── Public interface ─────────────────────────────────────────────────────────
 
-  // Agent 1: Tornado Path
-  onUpdate({ agent: 'path', timestamp: now(), type: 'update', data: { confidence: 0, reasoning: 'Analyzing meteorological data...' } });
+export interface RunAgentsOptions {
+  townModel: TownModel;
+  efScale: number;
+  windDirection: string;
+  sessionId: string;
+  onUpdate: (agent: AgentOutput['agent'], status: string) => void;
+  onFinal:  (agent: AgentOutput['agent'], data: AgentData) => void;
+  onDone:   () => void;
+  onError:  (message: string) => void;
+}
 
-  const pathData = await callAgent(buildPathPrompt(townModel, efScale, windDirection));
-  onUpdate({ agent: 'path', timestamp: now(), type: 'final', data: pathData });
+export async function runAgents({
+  townModel,
+  efScale,
+  windDirection,
+  sessionId,
+  onUpdate,
+  onFinal,
+  onDone,
+  onError,
+}: RunAgentsOptions): Promise<void> {
+  try {
+    // Agent 1: Tornado Path
+    onUpdate('path', 'Analyzing meteorological data...');
+    const pathData = await callAgent(buildPathPrompt(townModel, efScale, windDirection));
+    await publishAgentResult(sessionId, 'path', pathData);
+    onFinal('path', pathData);
 
-  // Agent 2: Structural
-  onUpdate({ agent: 'structural', timestamp: now(), type: 'update', data: { confidence: 0, reasoning: 'Assessing building vulnerabilities...' } });
+    // Agent 2: Structural — inject path context
+    onUpdate('structural', 'Assessing building vulnerabilities...');
+    const structuralData = await callAgent(
+      buildPathContext(pathData) + buildStructuralPrompt(townModel, efScale, pathData)
+    );
+    await publishAgentResult(sessionId, 'structural', structuralData);
+    onFinal('structural', structuralData);
 
-  const structuralData = await callAgent(buildStructuralPrompt(townModel, efScale, pathData));
-  onUpdate({ agent: 'structural', timestamp: now(), type: 'final', data: structuralData });
+    // Agent 3: Evacuation — inject path + structural context
+    onUpdate('evacuation', 'Computing evacuation routes...');
+    const evacuationData = await callAgent(
+      buildEvacContext(pathData, structuralData, townModel) +
+        buildEvacuationPrompt(townModel, pathData, structuralData)
+    );
+    await publishAgentResult(sessionId, 'evacuation', evacuationData);
+    onFinal('evacuation', evacuationData);
 
-  // Agent 3: Evacuation
-  onUpdate({ agent: 'evacuation', timestamp: now(), type: 'update', data: { confidence: 0, reasoning: 'Computing evacuation routes...' } });
+    // Agent 4: Response — inject all three
+    onUpdate('response', 'Synthesizing response plan...');
+    const responseData = await callAgent(
+      buildResponseContext(pathData, structuralData, evacuationData, townModel) +
+        buildResponsePrompt(townModel, efScale, pathData, structuralData, evacuationData)
+    );
+    await publishAgentResult(sessionId, 'response', responseData);
+    onFinal('response', responseData);
 
-  const evacuationData = await callAgent(buildEvacuationPrompt(townModel, pathData, structuralData));
-  onUpdate({ agent: 'evacuation', timestamp: now(), type: 'final', data: evacuationData });
-
-  // Agent 4: Response
-  onUpdate({ agent: 'response', timestamp: now(), type: 'update', data: { confidence: 0, reasoning: 'Synthesizing response plan...' } });
-
-  const responseData = await callAgent(buildResponsePrompt(townModel, efScale, pathData, structuralData, evacuationData));
-  onUpdate({ agent: 'response', timestamp: now(), type: 'final', data: responseData });
+    onDone();
+  } catch (err) {
+    onError(String(err));
+  }
 }

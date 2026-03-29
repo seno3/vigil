@@ -9,8 +9,9 @@ import {
   useCallback,
 } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
-import { OrbitControls, Grid, Stars } from '@react-three/drei';
+import { OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
+import { setOptions, importLibrary, type APIOptions } from '@googlemaps/js-api-loader';
 import {
   TownModel,
   AgentOutput,
@@ -33,10 +34,18 @@ function lerp(a: number, b: number, t: number) {
   return a + (b - a) * t;
 }
 
-// ─── Public props (unchanged) ─────────────────────────────────────────────────
+/** Approximate compass bearing (degrees from north) from point A to point B */
+function computeHeading(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const dLat = lat2 - lat1;
+  const dLng = (lng2 - lng1) * Math.cos((lat1 * Math.PI) / 180);
+  return (Math.atan2(dLng, dLat) * 180) / Math.PI;
+}
+
+// ─── Public props ─────────────────────────────────────────────────────────────
 interface Scene3DProps {
   townModel: TownModel;
   agentOutputs: Partial<Record<AgentOutput['agent'], AgentOutput>>;
+  onPositionUpdate?: (lat: number, lng: number) => void;
 }
 
 // ─── SceneContent props ───────────────────────────────────────────────────────
@@ -121,7 +130,7 @@ function WaypointDots({
   );
 }
 
-// ─── SceneContent (runs inside Canvas) ───────────────────────────────────────
+// ─── SceneContent (runs inside Canvas — transparent, street-level) ────────────
 function SceneContent({
   townModel,
   agentOutputs,
@@ -133,8 +142,8 @@ function SceneContent({
   const { lat: centerLat, lng: centerLng } = townModel.center;
 
   // Refs keep useFrame closure fresh between React renders
-  const progressRef   = useRef(timeProgress);
-  const isPlayingRef  = useRef(isPlaying);
+  const progressRef  = useRef(timeProgress);
+  const isPlayingRef = useRef(isPlaying);
   useEffect(() => { progressRef.current  = timeProgress; }, [timeProgress]);
   useEffect(() => { isPlayingRef.current = isPlaying;    }, [isPlaying]);
 
@@ -205,9 +214,9 @@ function SceneContent({
     const segA   = pathSegments[i];
     const segB   = pathSegments[Math.min(i + 1, pathSegments.length - 1)];
     return {
-      currentLat:   lerp(segA.lat,           segB.lat,           t),
-      currentLng:   lerp(segA.lng,           segB.lng,           t),
-      currentWidth: lerp(segA.width_m,       segB.width_m,       t),
+      currentLat:   lerp(segA.lat,            segB.lat,            t),
+      currentLng:   lerp(segA.lng,            segB.lng,            t),
+      currentWidth: lerp(segA.width_m,        segB.width_m,        t),
       currentWind:  lerp(segA.wind_speed_mph, segB.wind_speed_mph, t),
       currentSegIdx: i,
     };
@@ -268,50 +277,21 @@ function SceneContent({
 
   return (
     <>
-      {/* Atmosphere */}
-      <fog attach="fog" args={['#0a0e17', 800, 3000]} />
-      <color attach="background" args={['#0a0e17']} />
-
-      {/* Lighting — stormy overcast */}
-      <ambientLight intensity={0.25} color="#334466" />
-      {/* Primary overcast fill */}
+      {/* Lighting — overcast street-level, works on transparent bg */}
+      <ambientLight intensity={0.4} color="#334466" />
       <directionalLight
         position={[200, 600, 200]}
-        intensity={0.8}
+        intensity={0.5}
         color="#aabbcc"
         castShadow
         shadow-mapSize={[2048, 2048]}
       />
-      {/* Warm backlight */}
+      {/* Warm backlight — tornado glow from behind */}
       <directionalLight position={[-300, 200, -300]} intensity={0.3} color="#ff6b2b" />
-      {/* Pre-tornado sky — sickly yellow-green from directly above */}
-      <directionalLight position={[0, 800, 0]} intensity={0.45} color="#b8d444" />
+      {/* Sickly pre-tornado sky tint */}
+      <directionalLight position={[0, 800, 0]} intensity={0.35} color="#b8d444" />
 
-      {/* Stars overhead for atmosphere */}
-      <Stars radius={2000} depth={50} count={1000} factor={2} saturation={0} fade speed={0.5} />
-
-      {/* Ground grid */}
-      <Grid
-        args={[2000, 2000]}
-        cellSize={50}
-        cellThickness={0.3}
-        cellColor="#1e2a3a"
-        sectionSize={200}
-        sectionThickness={0.8}
-        sectionColor="#2a3a50"
-        fadeDistance={2000}
-        fadeStrength={1}
-        followCamera={false}
-        infiniteGrid
-      />
-
-      {/* Ground plane */}
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.5, 0]} receiveShadow>
-        <planeGeometry args={[3000, 3000]} />
-        <meshStandardMaterial color="#0d1420" roughness={1} />
-      </mesh>
-
-      {/* Buildings with progressive damage reveal */}
+      {/* Buildings — transparent damage overlays only */}
       <Buildings
         buildings={townModel.buildings}
         damageLevels={filteredDamageLevels}
@@ -365,15 +345,106 @@ function SceneContent({
   );
 }
 
-// ─── Scene3D — state owner, Canvas wrapper ────────────────────────────────────
-export default function Scene3D({ townModel, agentOutputs }: Scene3DProps) {
+// ─── Scene3D — state owner, two-layer compositor ──────────────────────────────
+export default function Scene3D({ townModel, agentOutputs, onPositionUpdate }: Scene3DProps) {
   const [timeProgress, setTimeProgress] = useState(0);
   const [isPlaying,    setIsPlaying]    = useState(false);
 
+  // ── Street View layer ──────────────────────────────────────────────────────
+  const svContainerRef = useRef<HTMLDivElement>(null);
+  const panoramaRef    = useRef<google.maps.StreetViewPanorama | null>(null);
+  const svFailedRef    = useRef(false);
+
+  useEffect(() => {
+    const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ?? '';
+    if (!apiKey || apiKey === 'your_google_maps_api_key_here') {
+      svFailedRef.current = true;
+      return;
+    }
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const opts: APIOptions = { key: apiKey, v: 'weekly' };
+        setOptions(opts);
+
+        const streetViewLib = await importLibrary('streetView') as typeof google.maps;
+        const { StreetViewPanorama, StreetViewService, StreetViewStatus } = streetViewLib;
+
+        if (cancelled || !svContainerRef.current) return;
+
+        const { lat, lng } = townModel.center;
+        const sv = new StreetViewService();
+
+        sv.getPanorama(
+          { location: { lat, lng }, radius: 200 },
+          (
+            _data: google.maps.StreetViewPanoramaData | null,
+            status: google.maps.StreetViewStatus,
+          ) => {
+            if (cancelled || !svContainerRef.current) return;
+            if (status !== StreetViewStatus.OK) {
+              svFailedRef.current = true;
+              return;
+            }
+            panoramaRef.current = new StreetViewPanorama(svContainerRef.current!, {
+              position:              { lat, lng },
+              pov:                   { heading: 45, pitch: 5 },
+              zoom:                  1,
+              addressControl:        false,
+              showRoadLabels:        false,
+              zoomControl:           false,
+              fullscreenControl:     false,
+              motionTracking:        false,
+              motionTrackingControl: false,
+            });
+          },
+        );
+      } catch {
+        if (!cancelled) svFailedRef.current = true;
+      }
+    })();
+
+    return () => { cancelled = true; };
+  // Only initialize once on mount for the town center
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ── Path segment data (used both for position update & SV tracking) ────────
   const pathSegments = useMemo<PathSegment[]>(
     () => agentOutputs['path']?.data.path_segments ?? [],
     [agentOutputs],
   );
+
+  // ── Update Street View + notify parent when tornado segment changes ─────────
+  const prevSegIdxRef = useRef(-1);
+  useEffect(() => {
+    if (pathSegments.length === 0) return;
+    const segIdx = Math.floor(timeProgress * (pathSegments.length - 1));
+    if (segIdx === prevSegIdxRef.current) return;
+    prevSegIdxRef.current = segIdx;
+
+    const seg = pathSegments[segIdx];
+    if (!seg) return;
+
+    // Notify parent (feeds Dashboard Street View panel)
+    if (onPositionUpdate) onPositionUpdate(seg.lat, seg.lng);
+
+    // Pan Street View toward tornado
+    if (panoramaRef.current) {
+      panoramaRef.current.setPosition({ lat: seg.lat, lng: seg.lng });
+      const nextSeg = pathSegments[Math.min(segIdx + 1, pathSegments.length - 1)];
+      if (nextSeg) {
+        const heading = computeHeading(seg.lat, seg.lng, nextSeg.lat, nextSeg.lng);
+        panoramaRef.current.setPov({ heading, pitch: 5 });
+      }
+    }
+  }, [timeProgress, pathSegments, onPositionUpdate]);
+
+  // ── Atmospheric overlay opacity — peaks when tornado is overhead ──────────
+  const darknessOpacity = Math.sin(Math.PI * timeProgress) * 0.55;
+  const redOpacity      = Math.max(0, Math.sin(Math.PI * timeProgress) - 0.6) * 0.25;
 
   const handleProgressChange = useCallback((p: number) => {
     setTimeProgress(p);
@@ -385,22 +456,72 @@ export default function Scene3D({ townModel, agentOutputs }: Scene3DProps) {
     [],
   );
 
+  const sceneHeight = pathSegments.length > 0 ? 'calc(100% - 72px)' : '100%';
+
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%', background: '#0a0e17' }}>
+
+      {/* Layer 1 — Google Street View background */}
+      <div
+        ref={svContainerRef}
+        style={{
+          position: 'absolute',
+          top: 0, left: 0, width: '100%',
+          height: sceneHeight,
+          zIndex: 0,
+          background: 'linear-gradient(to bottom, #0a0e17 0%, #1a0508 100%)',
+        }}
+      />
+
+      {/* Darkness overlay — intensifies as tornado approaches */}
+      {darknessOpacity > 0.01 && (
+        <div
+          style={{
+            position:      'absolute',
+            top: 0, left: 0, width: '100%',
+            height:        sceneHeight,
+            zIndex:        1,
+            background:    `rgba(20,10,5,${darknessOpacity.toFixed(3)})`,
+            pointerEvents: 'none',
+          }}
+        />
+      )}
+
+      {/* Red tint — tornado peak */}
+      {redOpacity > 0.01 && (
+        <div
+          style={{
+            position:      'absolute',
+            top: 0, left: 0, width: '100%',
+            height:        sceneHeight,
+            zIndex:        1,
+            background:    `rgba(180,30,10,${redOpacity.toFixed(3)})`,
+            pointerEvents: 'none',
+          }}
+        />
+      )}
+
+      {/* Layer 2 — Three.js transparent canvas */}
       <Canvas
         shadows
         camera={{
-          position: [0, 800, 600],
-          fov: 45,
-          near: 1,
-          far: 8000,
+          position: [0, 8, 40],
+          fov: 65,
+          near: 0.5,
+          far: 6000,
         }}
         gl={{
-          antialias: true,
-          toneMapping: THREE.ACESFilmicToneMapping,
+          alpha:              true,
+          antialias:          true,
+          toneMapping:        THREE.ACESFilmicToneMapping,
           toneMappingExposure: 0.8,
         }}
-        style={{ height: pathSegments.length > 0 ? 'calc(100% - 72px)' : '100%' }}
+        style={{
+          position: 'absolute',
+          top: 0, left: 0, width: '100%',
+          height: sceneHeight,
+          zIndex: 2,
+        }}
       >
         <Suspense fallback={null}>
           <SceneContent
@@ -417,10 +538,10 @@ export default function Scene3D({ townModel, agentOutputs }: Scene3DProps) {
           enablePan
           enableZoom
           enableRotate
-          minDistance={100}
-          maxDistance={3000}
+          minDistance={5}
+          maxDistance={2000}
           maxPolarAngle={Math.PI / 2.1}
-          target={[0, 0, 0]}
+          target={[0, 30, 0]}
         />
       </Canvas>
 

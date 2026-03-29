@@ -1,17 +1,10 @@
 'use client';
 
 import { useRef, useMemo } from 'react';
+import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { Building, DamageLevel } from '@/types';
 import { latLngToLocal } from '@/lib/geo';
-
-const DAMAGE_COLORS: Record<DamageLevel | 'default', string> = {
-  default: '#4a5568',
-  intact: '#4a5568',
-  minor: '#ecc94b',
-  major: '#ed8936',
-  destroyed: '#e53e3e',
-};
 
 interface BuildingsProps {
   buildings: Building[];
@@ -27,22 +20,45 @@ interface BuildingMeshProps {
   centerLng: number;
 }
 
+// Intact buildings are invisible — Street View shows the real structure.
+// Damaged buildings appear as semi-transparent colored overlays.
+const DAMAGE_CONFIG: Record<
+  Exclude<DamageLevel, 'intact'>,
+  { color: string; opacity: number; emissive: number }
+> = {
+  minor:     { color: '#ecc94b', opacity: 0.35, emissive: 0.10 },
+  major:     { color: '#f97316', opacity: 0.50, emissive: 0.20 },
+  destroyed: { color: '#ef4444', opacity: 0.70, emissive: 0.35 },
+};
+
 function BuildingMesh({ building, damage, centerLat, centerLng }: BuildingMeshProps) {
-  const meshRef = useRef<THREE.Mesh>(null);
+  const matRef  = useRef<THREE.MeshStandardMaterial>(null);
+  const seedRef = useRef(Math.random() * Math.PI * 2);
+
+  // Flicker emissive intensity on destroyed buildings
+  useFrame(({ clock }) => {
+    if (!matRef.current || damage !== 'destroyed') return;
+    matRef.current.emissiveIntensity =
+      0.35 + Math.sin(clock.getElapsedTime() * 9 + seedRef.current) * 0.18;
+  });
+
+  // Intact buildings are invisible — nothing to render
+  if (!damage || damage === 'intact') return null;
+
+  const cfg = DAMAGE_CONFIG[damage];
 
   const { geometry, position, rotation } = useMemo(() => {
     const height = building.levels * 3.5;
-    const poly = building.polygon;
+    const poly   = building.polygon;
 
     let geom: THREE.BufferGeometry;
     let pos: [number, number, number];
     let rot: [number, number, number] = [0, 0, 0];
 
     if (poly.length >= 3 && poly.length <= 16) {
-      // Use Shape + ExtrudeGeometry for the polygon footprint
       try {
         const shape = new THREE.Shape();
-        const pts = poly.map(([lat, lng]) => latLngToLocal(lat, lng, centerLat, centerLng));
+        const pts   = poly.map(([lat, lng]) => latLngToLocal(lat, lng, centerLat, centerLng));
 
         shape.moveTo(pts[0][0], pts[0][1]);
         for (let i = 1; i < pts.length; i++) {
@@ -50,45 +66,39 @@ function BuildingMesh({ building, damage, centerLat, centerLng }: BuildingMeshPr
         }
         shape.closePath();
 
-        const extrudeSettings = {
-          depth: height,
-          bevelEnabled: false,
-        };
-
-        geom = new THREE.ExtrudeGeometry(shape, extrudeSettings);
-        // ExtrudeGeometry extrudes along Z — rotate so it extrudes along Y (up)
+        geom = new THREE.ExtrudeGeometry(shape, { depth: height, bevelEnabled: false });
         geom.rotateX(-Math.PI / 2);
 
         const [cx, cz] = latLngToLocal(building.centroid.lat, building.centroid.lng, centerLat, centerLng);
         pos = [cx, 0, cz];
       } catch {
-        // Fallback to box
         const [cx, cz] = latLngToLocal(building.centroid.lat, building.centroid.lng, centerLat, centerLng);
         const side = Math.sqrt(building.area_sqm);
         geom = new THREE.BoxGeometry(side, height, side);
-        pos = [cx, height / 2, cz];
+        pos  = [cx, height / 2, cz];
       }
     } else {
-      // Box geometry fallback
       const [cx, cz] = latLngToLocal(building.centroid.lat, building.centroid.lng, centerLat, centerLng);
       const side = Math.sqrt(building.area_sqm);
       geom = new THREE.BoxGeometry(side, height, side);
-      pos = [cx, height / 2, cz];
+      pos  = [cx, height / 2, cz];
     }
 
     if (damage === 'destroyed') {
-      rot = [(Math.random() - 0.5) * 0.3, Math.random() * Math.PI * 2, (Math.random() - 0.5) * 0.3];
+      rot = [
+        (Math.random() - 0.5) * 0.3,
+        Math.random() * Math.PI * 2,
+        (Math.random() - 0.5) * 0.3,
+      ];
     }
 
     return { geometry: geom, position: pos, rotation: rot };
-  }, [building, centerLat, centerLng, damage]);
-
-  const color = DAMAGE_COLORS[damage ?? 'default'];
-  const emissiveIntensity = damage === 'destroyed' ? 0.3 : damage === 'major' ? 0.15 : 0.05;
+  // damage is intentionally excluded — rotation is baked at mount time
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [building, centerLat, centerLng]);
 
   return (
     <mesh
-      ref={meshRef}
       geometry={geometry}
       position={position}
       rotation={rotation}
@@ -96,9 +106,13 @@ function BuildingMesh({ building, damage, centerLat, centerLng }: BuildingMeshPr
       receiveShadow
     >
       <meshStandardMaterial
-        color={color}
-        emissive={color}
-        emissiveIntensity={emissiveIntensity}
+        ref={matRef}
+        color={cfg.color}
+        emissive={cfg.color}
+        emissiveIntensity={cfg.emissive}
+        transparent
+        opacity={cfg.opacity}
+        depthWrite={false}
         roughness={0.8}
         metalness={0.1}
       />

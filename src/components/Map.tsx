@@ -9,7 +9,7 @@ interface MapProps {
   loading: boolean;
 }
 
-const DEMO_ADDRESS = 'Moore, Oklahoma';
+const DEMO_ADDRESS = 'Moore, OK 73160';
 
 declare global {
   interface Window {
@@ -37,7 +37,7 @@ export default function Map({ townModel, onAddressSelect, loading }: MapProps) {
       const map = new mapboxgl.default.Map({
         container: mapContainerRef.current!,
         style: 'mapbox://styles/mapbox/dark-v11',
-        center: [-97.4868, 35.3395],
+        center: [-86.1581, 39.7684],
         zoom: 13,
         antialias: true,
       });
@@ -230,7 +230,7 @@ export default function Map({ townModel, onAddressSelect, loading }: MapProps) {
               color: '#ef4444',
             }}
           >
-            ▶ LOAD DEMO: Moore, Oklahoma
+            ▶ LOAD DEMO: Indianapolis, IN
           </button>
         )}
       </div>

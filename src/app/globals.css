@@ -5,6 +5,21 @@
 :root {
   --font-mono: 'IBM Plex Mono', 'JetBrains Mono', monospace;
   --font-sans: 'Inter', sans-serif;
+
+  /* ── Color system ───────────────────────────────────────── */
+  --bg-primary:    #0f1623;
+  --bg-secondary:  #161e2e;
+  --bg-card:       #1a2235;
+  --bg-elevated:   #1e2a3a;
+  --border:        #2a3a50;
+  --border-bright: #3a4f6a;
+  --text-primary:  #f0f6ff;
+  --text-secondary: #8fa8c0;
+  --text-muted:    #4a6080;
+  --accent-red:    #f05252;
+  --accent-cyan:   #38bdf8;
+  --accent-green:  #4ade80;
+  --accent-orange: #fb923c;
 }
 
 * {
@@ -21,36 +36,25 @@ body {
 }
 
 body {
-  background: #0a0e17;
-  color: #f0f4f8;
+  background: var(--bg-primary);
+  color: var(--text-primary);
   font-family: var(--font-sans);
 }
 
 /* Scrollbar */
-::-webkit-scrollbar {
-  width: 6px;
-}
-::-webkit-scrollbar-track {
-  background: #141926;
-}
-::-webkit-scrollbar-thumb {
-  background: #2a3a50;
-  border-radius: 3px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: #ef4444;
-}
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: var(--bg-secondary); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--accent-red); }
 
 /* Mapbox overrides */
 .mapboxgl-ctrl-logo,
-.mapboxgl-ctrl-attrib {
-  display: none !important;
-}
+.mapboxgl-ctrl-attrib { display: none !important; }
 
 .mapboxgl-popup-content {
-  background: #141926 !important;
-  color: #f0f4f8 !important;
-  border: 1px solid #1e2a3a !important;
+  background: var(--bg-secondary) !important;
+  color: var(--text-primary) !important;
+  border: 1px solid var(--border) !important;
   border-radius: 4px !important;
   font-family: var(--font-mono) !important;
   font-size: 12px !important;
@@ -58,53 +62,58 @@ body {
 }
 
 .mapboxgl-popup-tip {
-  border-top-color: #141926 !important;
+  border-top-color: var(--bg-secondary) !important;
 }
 
-/* Agent label animations */
+/* ── Keyframes ──────────────────────────────────────────── */
+
 @keyframes fadeInUp {
-  from {
-    opacity: 0;
-    transform: translateY(8px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
 @keyframes pulseGlow {
-  0%, 100% {
-    box-shadow: 0 0 4px rgba(239, 68, 68, 0.3);
-  }
-  50% {
-    box-shadow: 0 0 16px rgba(239, 68, 68, 0.6);
-  }
+  0%, 100% { box-shadow: 0 0 4px rgba(240, 82, 82, 0.3); }
+  50%       { box-shadow: 0 0 16px rgba(240, 82, 82, 0.6); }
 }
 
 @keyframes scanline {
-  0% {
-    transform: translateY(-100%);
-  }
-  100% {
-    transform: translateY(100vh);
-  }
+  0%   { transform: translateY(-100%); }
+  100% { transform: translateY(100vh); }
 }
 
-.animate-fade-in-up {
-  animation: fadeInUp 0.4s ease-out forwards;
+@keyframes button-shimmer {
+  0%   { left: -100%; }
+  100% { left: 200%; }
 }
 
-.agent-running {
-  animation: pulseGlow 2s ease-in-out infinite;
+/* ── Utilities ──────────────────────────────────────────── */
+
+.animate-fade-in-up { animation: fadeInUp 0.4s ease-out forwards; }
+.agent-running      { animation: pulseGlow 2s ease-in-out infinite; }
+
+/* Simulate button shimmer sweep on hover */
+.simulate-button::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 40%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.18), transparent);
+  pointer-events: none;
+}
+.simulate-button:not(:disabled):hover::before {
+  animation: button-shimmer 0.55s ease-in-out;
 }
 
 /* Grid overlay for tactical look */
 .tactical-grid {
   background-image:
-    linear-gradient(rgba(30, 42, 58, 0.3) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(30, 42, 58, 0.3) 1px, transparent 1px);
+    linear-gradient(var(--border) 1px, transparent 1px),
+    linear-gradient(90deg, var(--border) 1px, transparent 1px);
   background-size: 40px 40px;
+  opacity: 0.3;
 }
 
 /* Drei Html labels */
@@ -118,12 +127,12 @@ body {
 
 /* EF scale colors */
 .ef1 { color: #fbbf24; }
-.ef2 { color: #f97316; }
-.ef3 { color: #ef4444; }
+.ef2 { color: #fb923c; }
+.ef3 { color: var(--accent-red); }
 .ef4 { color: #dc2626; }
 .ef5 { color: #7f1d1d; }
 
-.severity-critical { border-left-color: #ef4444 !important; }
-.severity-warning  { border-left-color: #ff6b2b !important; }
-.severity-info     { border-left-color: #22d3ee !important; }
-.severity-safe     { border-left-color: #4ade80 !important; }
+.severity-critical { border-left-color: var(--accent-red)    !important; }
+.severity-warning  { border-left-color: var(--accent-orange)  !important; }
+.severity-info     { border-left-color: var(--accent-cyan)    !important; }
+.severity-safe     { border-left-color: var(--accent-green)   !important; }

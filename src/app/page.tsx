@@ -1,214 +1,135 @@
 'use client';
 
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback } from 'react';
 import dynamic from 'next/dynamic';
-import { TownModel, AgentOutput, AgentStatus, SimulationState } from '@/types';
+import { TownModel, AgentOutput } from '@/types';
 import Dashboard from '@/components/Dashboard';
+import { useSimulationWS } from '@/hooks/useSimulationWS';
 
 // Dynamic imports to avoid SSR issues with mapbox-gl and three.js
-const Map = dynamic(() => import('@/components/Map'), { ssr: false });
+const Map    = dynamic(() => import('@/components/Map'),    { ssr: false });
 const Scene3D = dynamic(() => import('@/components/Scene3D'), { ssr: false });
 
-const INITIAL_STATE: SimulationState = {
-  status: 'idle',
-  townModel: null,
-  agentStatuses: {
-    path: 'idle',
-    structural: 'idle',
-    evacuation: 'idle',
-    response: 'idle',
-  },
-  agentOutputs: {
-    path: null,
-    structural: null,
-    evacuation: null,
-    response: null,
-  },
-  efScale: 3,
-  windDirection: 'SW',
-  address: '',
-};
-
 export default function Home() {
-  const [state, setState] = useState<SimulationState>(INITIAL_STATE);
-  const [show3D, setShow3D] = useState(false);
-  const [errorMsg, setErrorMsg] = useState<string | undefined>();
-  const abortRef = useRef<AbortController | null>(null);
+  // ── Location / setup state ──────────────────────────────────────────────────
+  const [townModel,      setTownModel]      = useState<TownModel | null>(null);
+  const [efScale,        setEfScale]        = useState(3);
+  const [windDirection,  setWindDirection]  = useState('SW');
+  const [address,        setAddress]        = useState('Suburban Impact Zone — EF4 Scenario');
+  const [loadStatus,     setLoadStatus]     = useState<'idle' | 'loading' | 'error'>('idle');
+  const [loadError,      setLoadError]      = useState<string | undefined>();
+  const [show3D,         setShow3D]         = useState(false);
+  const [tornadoPosition, setTornadoPosition] = useState<{ lat: number; lng: number } | null>(null);
 
-  const handleAddressSelect = useCallback(async (address: string) => {
-    setState((s) => ({ ...s, status: 'loading', address, townModel: null }));
-    setErrorMsg(undefined);
+  // ── Simulation state (WebSocket) ────────────────────────────────────────────
+  const {
+    startSimulation,
+    agentStatuses,
+    agentOutputs,
+    simStatus: wsStatus,
+    errorMsg: wsError,
+    reset: resetWS,
+  } = useSimulationWS();
+
+  // ── Combined status / error for Dashboard ───────────────────────────────────
+  const simStatus = loadStatus === 'loading' ? 'loading' : wsStatus;
+  const errorMsg  = loadError ?? wsError;
+
+  // ── Handlers ────────────────────────────────────────────────────────────────
+  const handleAddressSelect = useCallback(async (addr: string) => {
+    setLoadStatus('loading');
+    setAddress(addr);
+    setLoadError(undefined);
+    setTownModel(null);
 
     try {
-      const res = await fetch('/api/town-model', {
-        method: 'POST',
+      const res  = await fetch('/api/town-model', {
+        method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ address }),
+        body:    JSON.stringify({ address: addr }),
       });
       const json = await res.json();
-      const townModel: TownModel = json.townModel;
 
-      setState((s) => ({ ...s, status: 'idle', townModel }));
+      if (!res.ok) {
+        throw new Error(json.error ?? `Request failed: ${res.status}`);
+      }
+
+      setTownModel(json.townModel as TownModel);
+      setLoadStatus('idle');
     } catch (err) {
-      setErrorMsg(`Failed to load area: ${err}`);
-      setState((s) => ({ ...s, status: 'error' }));
+      setLoadError(`Failed to load area: ${err}`);
+      setLoadStatus('error');
     }
   }, []);
 
-  const handleSimulate = useCallback(async () => {
-    if (!state.townModel) return;
-
-    // Reset agent state
-    setState((s) => ({
-      ...s,
-      status: 'simulating',
-      agentStatuses: {
-        path: 'idle',
-        structural: 'idle',
-        evacuation: 'idle',
-        response: 'idle',
-      },
-      agentOutputs: {
-        path: null,
-        structural: null,
-        evacuation: null,
-        response: null,
-      },
-    }));
-    setErrorMsg(undefined);
-    setShow3D(true); // Switch to 3D view immediately
-
-    abortRef.current?.abort();
-    const controller = new AbortController();
-    abortRef.current = controller;
-
-    try {
-      const res = await fetch('/api/simulate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          townModel: state.townModel,
-          efScale: state.efScale,
-          windDirection: state.windDirection,
-        }),
-        signal: controller.signal,
-      });
-
-      if (!res.ok || !res.body) {
-        throw new Error(`Simulation request failed: ${res.status}`);
-      }
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() ?? '';
-
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          const raw = line.slice(6).trim();
-          if (!raw) continue;
-
-          try {
-            const event = JSON.parse(raw);
-
-            if (event.type === 'done') {
-              setState((s) => ({ ...s, status: 'complete' }));
-              continue;
-            }
-
-            if (event.type === 'error') {
-              setErrorMsg(event.message ?? 'Unknown simulation error');
-              setState((s) => ({ ...s, status: 'error' }));
-              continue;
-            }
-
-            const output = event as AgentOutput;
-            const agent = output.agent;
-
-            setState((s) => {
-              const newAgentStatuses = { ...s.agentStatuses };
-              const newAgentOutputs = { ...s.agentOutputs };
-
-              if (output.type === 'update') {
-                newAgentStatuses[agent] = 'running';
-              } else if (output.type === 'final') {
-                newAgentStatuses[agent] = 'complete';
-                newAgentOutputs[agent] = output;
-              }
-
-              return { ...s, agentStatuses: newAgentStatuses, agentOutputs: newAgentOutputs };
-            });
-          } catch {
-            // Skip malformed events
-          }
-        }
-      }
-    } catch (err: unknown) {
-      if ((err as Error)?.name === 'AbortError') return;
-      setErrorMsg(`Simulation failed: ${err}`);
-      setState((s) => ({ ...s, status: 'error' }));
-    }
-  }, [state.townModel, state.efScale, state.windDirection]);
+  const handleSimulate = useCallback(() => {
+    if (!townModel) return;
+    setShow3D(true);
+    setTornadoPosition(null);
+    startSimulation(townModel, efScale, windDirection);
+  }, [townModel, efScale, windDirection, startSimulation]);
 
   const handleReset = useCallback(() => {
-    abortRef.current?.abort();
-    setState(INITIAL_STATE);
+    resetWS();
+    setTownModel(null);
+    setLoadStatus('idle');
+    setLoadError(undefined);
+    setAddress('Suburban Impact Zone — EF4 Scenario');
     setShow3D(false);
-    setErrorMsg(undefined);
+    setTornadoPosition(null);
+  }, [resetWS]);
+
+  const handlePositionUpdate = useCallback((lat: number, lng: number) => {
+    setTornadoPosition({ lat, lng });
   }, []);
 
+  // ── Filtered outputs (non-null) ─────────────────────────────────────────────
   const agentOutputsFiltered = Object.fromEntries(
-    Object.entries(state.agentOutputs).filter(([, v]) => v !== null)
+    Object.entries(agentOutputs).filter(([, v]) => v !== null)
   ) as Partial<Record<AgentOutput['agent'], AgentOutput>>;
 
+  const showReset = wsStatus === 'simulating' || wsStatus === 'complete';
+
   return (
-    <div className="h-screen w-screen flex overflow-hidden" style={{ background: '#0a0e17' }}>
+    <div className="h-screen w-screen flex overflow-hidden" style={{ background: '#0f1623' }}>
       {/* Header bar */}
       <div
         className="absolute top-0 left-0 right-0 z-20 flex items-center justify-between px-4 py-2"
         style={{
-          background: 'rgba(10,14,23,0.95)',
-          borderBottom: '1px solid #1e2a3a',
+          background:    'rgba(15,22,35,0.95)',
+          borderBottom:  '1px solid #2a3a50',
           backdropFilter: 'blur(8px)',
-          height: '44px',
+          height:        '44px',
         }}
       >
         <div className="flex items-center gap-3">
-          <span
-            className="text-base font-mono font-bold tracking-widest"
-            style={{ color: '#ef4444' }}
-          >
+          <span className="text-base font-mono font-bold tracking-widest" style={{ color: '#f05252' }}>
             VORTEX
           </span>
           <span className="text-xs font-mono text-[#2a3a50]">|</span>
-          <span className="text-xs font-mono text-[#556677]">AI TORNADO IMPACT SIMULATOR</span>
+          <span className="text-xs font-mono" style={{ color: '#8fa8c0' }}>AI TORNADO IMPACT SIMULATOR</span>
+          <span className="text-xs font-mono text-[#2a3a50]">|</span>
+          <span className="text-xs font-mono" style={{ color: '#8fa8c0' }}>IMPACT ZONE  •  EF4 SCENARIO</span>
         </div>
         <div className="flex items-center gap-3">
           {show3D && (
             <button
               onClick={() => setShow3D(false)}
               className="text-xs font-mono px-3 py-1 rounded transition-colors"
-              style={{ color: '#8899aa', border: '1px solid #1e2a3a' }}
-              onMouseEnter={(e) => ((e.target as HTMLElement).style.color = '#f0f4f8')}
-              onMouseLeave={(e) => ((e.target as HTMLElement).style.color = '#8899aa')}
+              style={{ color: '#8fa8c0', border: '1px solid #2a3a50' }}
+              onMouseEnter={(e) => ((e.target as HTMLElement).style.color = '#f0f6ff')}
+              onMouseLeave={(e) => ((e.target as HTMLElement).style.color = '#8fa8c0')}
             >
               ← MAP VIEW
             </button>
           )}
-          {(state.status === 'simulating' || state.status === 'complete') && (
+          {showReset && (
             <button
               onClick={handleReset}
               className="text-xs font-mono px-3 py-1 rounded transition-colors"
-              style={{ color: '#8899aa', border: '1px solid #1e2a3a' }}
-              onMouseEnter={(e) => ((e.target as HTMLElement).style.color = '#ef4444')}
-              onMouseLeave={(e) => ((e.target as HTMLElement).style.color = '#8899aa')}
+              style={{ color: '#8fa8c0', border: '1px solid #2a3a50' }}
+              onMouseEnter={(e) => ((e.target as HTMLElement).style.color = '#f05252')}
+              onMouseLeave={(e) => ((e.target as HTMLElement).style.color = '#8fa8c0')}
             >
               RESET
             </button>
@@ -218,7 +139,7 @@ export default function Home() {
               className="w-1.5 h-1.5 rounded-full"
               style={{ background: '#4ade80', boxShadow: '0 0 4px #4ade80' }}
             />
-            <span className="text-xs font-mono text-[#4ade80]">ONLINE</span>
+            <span className="text-xs font-mono" style={{ color: '#4ade80' }}>ONLINE</span>
           </div>
         </div>
       </div>
@@ -227,36 +148,37 @@ export default function Home() {
       <div className="flex w-full pt-[44px]">
         {/* Left: Map or 3D scene */}
         <div className="flex-1 relative" style={{ width: '70%' }}>
-          {/* Map (always rendered but hidden when 3D is shown) */}
+          {/* Map */}
           <div
             className="absolute inset-0 transition-opacity duration-500"
             style={{ opacity: show3D ? 0 : 1, pointerEvents: show3D ? 'none' : 'auto' }}
           >
             <Map
-              townModel={state.townModel}
+              townModel={townModel}
               onAddressSelect={handleAddressSelect}
-              loading={state.status === 'loading'}
+              loading={loadStatus === 'loading'}
             />
           </div>
 
           {/* 3D Scene */}
-          {show3D && state.townModel && (
+          {show3D && townModel && (
             <div className="absolute inset-0">
               <Scene3D
-                townModel={state.townModel}
+                townModel={townModel}
                 agentOutputs={agentOutputsFiltered}
+                onPositionUpdate={handlePositionUpdate}
               />
             </div>
           )}
 
-          {/* Transition to 3D prompt */}
-          {!show3D && state.townModel && state.status === 'idle' && (
+          {/* Preview 3D prompt */}
+          {!show3D && townModel && wsStatus === 'idle' && loadStatus === 'idle' && (
             <div
               className="absolute bottom-4 right-4 z-10 flex items-center gap-2 px-3 py-2 rounded font-mono text-xs cursor-pointer transition-all"
               style={{
-                background: 'rgba(10,14,23,0.9)',
-                border: '1px solid rgba(239,68,68,0.4)',
-                color: '#ef4444',
+                background:    'rgba(15,22,35,0.9)',
+                border:        '1px solid rgba(240,82,82,0.4)',
+                color:         '#f05252',
                 backdropFilter: 'blur(4px)',
               }}
               onClick={() => setShow3D(true)}
@@ -270,24 +192,25 @@ export default function Home() {
         <div
           className="shrink-0 overflow-hidden"
           style={{
-            width: '30%',
-            minWidth: '320px',
-            maxWidth: '420px',
-            borderLeft: '1px solid #1e2a3a',
+            width:      '30%',
+            minWidth:   '320px',
+            maxWidth:   '420px',
+            borderLeft: '1px solid #2a3a50',
           }}
         >
           <Dashboard
-            address={state.address}
-            townModel={state.townModel}
-            efScale={state.efScale}
-            windDirection={state.windDirection}
-            agentStatuses={state.agentStatuses as Record<AgentOutput['agent'], AgentStatus>}
+            address={address}
+            townModel={townModel}
+            efScale={efScale}
+            windDirection={windDirection}
+            agentStatuses={agentStatuses as Record<AgentOutput['agent'], import('@/types').AgentStatus>}
             agentOutputs={agentOutputsFiltered}
-            simStatus={state.status}
-            onEfChange={(ef) => setState((s) => ({ ...s, efScale: ef }))}
-            onWindChange={(dir) => setState((s) => ({ ...s, windDirection: dir }))}
+            simStatus={simStatus}
+            onEfChange={(ef) => setEfScale(ef)}
+            onWindChange={(dir) => setWindDirection(dir)}
             onSimulate={handleSimulate}
             errorMsg={errorMsg}
+            tornadoPosition={tornadoPosition ?? undefined}
           />
         </div>
       </div>

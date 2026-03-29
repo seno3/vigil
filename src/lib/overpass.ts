@@ -20,19 +20,37 @@ interface OverpassResponse {
   elements: Array<OverpassNode | OverpassWay>;
 }
 
-const OVERPASS_ENDPOINT = 'https://overpass-api.de/api/interpreter';
-const TIMEOUT = 20000;
+const OVERPASS_ENDPOINTS = [
+  'https://overpass-api.de/api/interpreter',
+  'https://overpass.kumi.systems/api/interpreter',
+  'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
+];
+const TIMEOUT = 15000;
 
 async function queryOverpass(query: string): Promise<OverpassResponse> {
-  const res = await fetch(OVERPASS_ENDPOINT, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: `data=${encodeURIComponent(query)}`,
-    signal: AbortSignal.timeout(TIMEOUT),
-  });
+  let lastError: Error = new Error('No endpoints tried');
 
-  if (!res.ok) throw new Error(`Overpass API error: ${res.status}`);
-  return res.json();
+  for (let attempt = 0; attempt < OVERPASS_ENDPOINTS.length; attempt++) {
+    const endpoint = OVERPASS_ENDPOINTS[attempt];
+    try {
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: `data=${encodeURIComponent(query)}`,
+        signal: AbortSignal.timeout(TIMEOUT),
+      });
+
+      if (!res.ok) throw new Error(`Overpass API error: ${res.status}`);
+      return res.json();
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+      if (attempt < OVERPASS_ENDPOINTS.length - 1) {
+        await new Promise((resolve) => setTimeout(resolve, 1000 * Math.pow(2, attempt)));
+      }
+    }
+  }
+
+  throw lastError;
 }
 
 function inferBuildingType(tags: Record<string, string> = {}): string {

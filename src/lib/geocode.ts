@@ -7,8 +7,8 @@ export interface GeocodedLocation {
 export async function geocodeAddress(address: string): Promise<GeocodedLocation> {
   const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
   if (!token || token === 'pk.your_mapbox_token_here') {
-    // Return Moore, OK as fallback
-    return { lat: 35.3395, lng: -97.4868, place_name: 'Moore, Oklahoma, United States' };
+    // Return Indianapolis, IN as fallback
+    return { lat: 39.7684, lng: -86.1581, place_name: '1200 S Meridian St, Indianapolis, Indiana, United States' };
   }
 
   const encoded = encodeURIComponent(address);

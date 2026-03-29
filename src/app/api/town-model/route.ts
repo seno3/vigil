@@ -7,7 +7,7 @@ export const maxDuration = 30;
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const address: string = body.address ?? 'Moore, Oklahoma';
+    const address: string = body.address ?? '1200 S Meridian St, Indianapolis, IN 46225';
 
     const townModel = await buildTownModel(address);
     return NextResponse.json({ townModel });
