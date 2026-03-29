@@ -8,7 +8,7 @@ interface MapProps {
   is3D?: boolean;
   center?: [number, number];
   locateTrigger?: number;
-  onFlyEnd?: () => void;
+  onReady?: () => void;
   onMapClick?: (lng: number, lat: number) => void;
   onBuildingClick?: (lng: number, lat: number, buildingId: string) => void;
 }
@@ -19,7 +19,7 @@ declare global {
   }
 }
 
-export default function Map({ threatBuildings, is3D, center, locateTrigger, onFlyEnd, onMapClick, onBuildingClick }: MapProps) {
+export default function Map({ threatBuildings, is3D, center, locateTrigger, onReady, onMapClick, onBuildingClick }: MapProps) {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const mapboxglRef = useRef<any>(null);
@@ -29,8 +29,7 @@ export default function Map({ threatBuildings, is3D, center, locateTrigger, onFl
   const watchIdRef = useRef<number | null>(null);
   const markerAddedRef = useRef(false);
   const userPosRef = useRef<[number, number] | null>(null);
-  const onFlyEndRef = useRef(onFlyEnd);
-  const flyEndFiredRef = useRef(false);
+  const onReadyRef = useRef(onReady);
 
   const syncCenter = useCallback(() => {
     const map = mapRef.current;
@@ -44,7 +43,7 @@ export default function Map({ threatBuildings, is3D, center, locateTrigger, onFl
   const onBuildingClickRef = useRef(onBuildingClick);
   useEffect(() => { onMapClickRef.current = onMapClick; }, [onMapClick]);
   useEffect(() => { onBuildingClickRef.current = onBuildingClick; }, [onBuildingClick]);
-  useEffect(() => { onFlyEndRef.current = onFlyEnd; }, [onFlyEnd]);
+  useEffect(() => { onReadyRef.current = onReady; }, [onReady]);
 
   useEffect(() => {
     if (!mapContainerRef.current) return;
@@ -189,16 +188,19 @@ export default function Map({ threatBuildings, is3D, center, locateTrigger, onFl
     map.easeTo({ pitch: is3D ? 45 : 0, bearing: is3D ? -17.6 : 0, duration: 800 });
   }, [is3D, mapLoaded]);
 
-  // React to center prop changes
+  // React to center prop changes — jump instantly (hidden behind overlay on initial load)
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapLoaded || !center) return;
-    map.flyTo({ center, zoom: 14, duration: 1000 });
-    if (onFlyEndRef.current && !flyEndFiredRef.current) {
-      flyEndFiredRef.current = true;
-      map.once('moveend', () => onFlyEndRef.current?.());
-    }
+    map.jumpTo({ center, zoom: 14 });
   }, [center, mapLoaded]);
+
+  // Fire onReady after first idle following map load
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapLoaded) return;
+    map.once('idle', () => onReadyRef.current?.());
+  }, [mapLoaded]);
 
   // Fly to user's current position on locate trigger
   useEffect(() => {

@@ -53,7 +53,7 @@ export default function NotificationFeed({ lng, lat, radius }: NotificationFeedP
         </div>
       </div>
       <div style={{ flex: 1, overflowY: 'auto', padding: '8px' }}>
-        {filtered.length === 0 && <div style={{ padding: '24px 8px', textAlign: 'center', fontSize: '11px', color: 'rgba(255,255,255,0.2)', letterSpacing: '0.1em' }}>NO TIPS IN AREA</div>}
+        {filtered.length === 0 && <div style={{ padding: '24px 8px', textAlign: 'center', fontSize: '11px', color: 'rgba(255,255,255,0.2)', letterSpacing: '0.1em' }}>NO FLARES IN AREA</div>}
         {filtered.map(tip => {
           const color = SEVERITY_COLORS[tip.category] ?? '#888';
           const isCritical = tip.urgency === 'critical' || tip.category === 'active_threat';

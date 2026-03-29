@@ -7,9 +7,7 @@ import ProfilePanel from '@/components/ui/ProfilePanel';
 interface TopBarProps {
   user: User | null;
   is3D: boolean;
-  radius: number;
   onToggle3D: () => void;
-  onRadiusChange: (r: number) => void;
   onLocate: () => void;
   onAuthOpen: () => void;
   onSignOut: () => void;
@@ -17,7 +15,7 @@ interface TopBarProps {
 
 const FONT = 'var(--font-sans, sans-serif)';
 
-export default function TopBar({ user, is3D, radius, onToggle3D, onRadiusChange, onLocate, onAuthOpen, onSignOut }: TopBarProps) {
+export default function TopBar({ user, is3D, onToggle3D, onLocate, onAuthOpen, onSignOut }: TopBarProps) {
   const router = useRouter();
   const [panelOpen, setPanelOpen] = useState(false);
   const [avatarHover, setAvatarHover] = useState(false);
@@ -66,13 +64,7 @@ export default function TopBar({ user, is3D, radius, onToggle3D, onRadiusChange,
           </span>
         </div>
 
-        <button onClick={onToggle3D} style={{ ...pill, background: is3D ? 'rgba(255,255,255,0.18)' : 'rgba(255,255,255,0.06)', color: is3D ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.5)' }}>3D</button>
-        <select value={radius} onChange={e => onRadiusChange(Number(e.target.value))} style={{ ...pill, appearance: 'none' as const }}>
-          <option value={804}>0.5MI</option>
-          <option value={1609}>1MI</option>
-          <option value={3218}>2MI</option>
-          <option value={8046}>5MI</option>
-        </select>
+        <button onClick={onToggle3D} style={pill}>{is3D ? '2D' : '3D'}</button>
 
         {user ? (
           <>

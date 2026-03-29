@@ -83,3 +83,16 @@ export interface ThreatState {
   threatLevel: ThreatLevel;
   synthesis?: string;
 }
+
+// ─── Emergency domain types ───────────────────────────────────────────────────
+export type EmergencyType = 'shooting' | 'tornado' | 'earthquake' | 'fire';
+
+export interface Emergency {
+  id: string;
+  type: EmergencyType;
+  active: boolean;
+  lat: number;
+  lng: number;
+  address?: string;
+  createdAt: string;
+}
