@@ -3,7 +3,6 @@
  * @see https://docs.mapbox.com/api/search/geocoding/
  */
 
-export const GEOCODE_COUNTRY = 'US';
 export const GEOCODE_LANGUAGE = 'en';
 
 /** Feature types for forward (search) — broader than place+address alone. */
@@ -29,7 +28,6 @@ export function forwardGeocodeUrl(p: ForwardGeocodeParams): string {
   const encoded = encodeURIComponent(p.query);
   const params = new URLSearchParams({
     access_token: p.accessToken,
-    country: GEOCODE_COUNTRY,
     language: GEOCODE_LANGUAGE,
     types: FORWARD_TYPES,
     limit: String(Math.min(10, Math.max(1, p.limit ?? 8))),
@@ -73,7 +71,6 @@ export function serverForwardGeocodeUrl(p: ServerForwardGeocodeParams): string {
   const encoded = encodeURIComponent(p.query);
   const params = new URLSearchParams({
     access_token: p.accessToken,
-    country: GEOCODE_COUNTRY,
     language: GEOCODE_LANGUAGE,
     types: FORWARD_TYPES,
     limit: '1',

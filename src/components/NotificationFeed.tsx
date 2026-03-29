@@ -4,6 +4,7 @@ import type { Tip, TipCategory, User } from '@/types';
 import { formatFlareRadiusShort } from '@/lib/flareRadius';
 import { VIGIL_FLARES_CHANGED_EVENT } from '@/lib/flareSync';
 import { usePreferredUnit } from '@/hooks/usePreferredUnit';
+import { useUserLocation } from '@/hooks/useUserLocation';
 import CredibilityBadge from './CredibilityBadge';
 import ProfilePanel from '@/components/ui/ProfilePanel';
 import AnalysisReceipt from './AnalysisReceipt';
@@ -60,6 +61,25 @@ function timeAgo(date: string) {
   return `${Math.floor(s / 3600)}h ago`;
 }
 
+function haversineM(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6_371_000;
+  const toR = (d: number) => (d * Math.PI) / 180;
+  const dLat = toR(lat2 - lat1);
+  const dLng = toR(lng2 - lng1);
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toR(lat1)) * Math.cos(toR(lat2)) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function formatDist(meters: number, unit: 'mi' | 'km'): string {
+  if (unit === 'km') {
+    if (meters >= 1000) return `${(meters / 1000).toFixed(1).replace(/\.0$/, '')} km`;
+    return `${Math.round(meters)} m`;
+  }
+  const mi = meters / 1609.344;
+  if (mi < 0.1) return `${Math.round(meters * 3.281)} ft`;
+  return `${mi < 10 ? mi.toFixed(1).replace(/\.0$/, '') : Math.round(mi)} mi`;
+}
+
 export default function NotificationFeed({
   lng,
   lat,
@@ -73,6 +93,7 @@ export default function NotificationFeed({
   onOpenSettings,
 }: NotificationFeedProps) {
   const { unit } = usePreferredUnit();
+  const userLoc = useUserLocation();
   const [tips, setTips] = useState<Tip[]>([]);
   const [filter, setFilter] = useState<TipCategory | 'all'>('all');
   const [upvotingId, setUpvotingId] = useState<string | null>(null);
@@ -399,7 +420,21 @@ export default function NotificationFeed({
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.25)' }}>{timeAgo(tip.createdAt)}</span>
+                    <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.25)', fontFamily: 'var(--font-mono, monospace)', letterSpacing: '0.03em' }}>
+                      {timeAgo(tip.createdAt)}
+                      {userLoc && (
+                        <>
+                          {' · '}
+                          {formatDist(
+                            haversineM(
+                              userLoc.lat, userLoc.lng,
+                              tip.location.coordinates[1], tip.location.coordinates[0],
+                            ),
+                            unit,
+                          )}
+                        </>
+                      )}
+                    </span>
                     <CredibilityBadge score={tip.credibilityScore} />
                   </div>
                   <button
